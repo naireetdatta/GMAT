@@ -1,0 +1,538 @@
+// ============================================
+// GMAT Platform — Prisma Schema
+// Complete database design for all modules
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTH & USERS
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  avatar        String?
+  role          Role      @default(STUDENT)
+  provider      AuthProvider @default(CREDENTIALS)
+  providerId    String?
+  emailVerified DateTime?
+  preferences   Json
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  sessions        Session[]
+  exams           Exam[]
+  scores          Score[]
+  flashcards      Flashcard[]
+  mistakes        MistakeEntry[]
+  studyPlans      StudyPlan[]
+  tutorSessions   TutorSession[]
+  coachReports    CoachReport[]
+  userKnowledge   UserKnowledge[]
+  userAnalytics   UserAnalytics[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  device    String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  resource   String
+  resourceId String?
+  metadata   Json
+  ip         String?
+  userAgent  String?
+  timestamp  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+// ============================================
+// EXAM ENGINE
+// ============================================
+
+model Exam {
+  id             String     @id @default(cuid())
+  userId         String
+  type           ExamType   @default(PRACTICE)
+  status         ExamStatus @default(NOT_STARTED)
+  sectionOrder   Json       // SectionType[] — chosen order
+  currentSection Int        @default(0)
+  breakTaken     Boolean    @default(false)
+  breakStartedAt DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  totalScore     Int?
+  createdAt      DateTime   @default(now())
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sections ExamSection[]
+  scores   Score[]
+  reports  CoachReport[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("exams")
+}
+
+model ExamSection {
+  id              String        @id @default(cuid())
+  examId          String
+  section         SectionType
+  status          SectionStatus @default(NOT_STARTED)
+  orderIndex      Int           // 0, 1, 2
+  timeRemaining   Int           // seconds
+  sectionScore    Int?
+  abilityEstimate Float         @default(0)
+  editsRemaining  Int           @default(3)
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  exam      Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  questions ExamQuestion[]
+
+  @@unique([examId, section])
+  @@index([examId])
+  @@map("exam_sections")
+}
+
+model ExamQuestion {
+  id         String    @id @default(cuid())
+  sectionId  String
+  questionId String
+  orderIndex Int
+  userAnswer String?
+  isCorrect  Boolean?
+  isFlagged  Boolean   @default(false)
+  isSkipped  Boolean   @default(true)
+  timeTaken  Int       @default(0) // seconds
+  isEdited   Boolean   @default(false)
+  answeredAt DateTime?
+
+  section  ExamSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  question Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([sectionId, orderIndex])
+  @@index([sectionId])
+  @@index([questionId])
+  @@map("exam_questions")
+}
+
+model Score {
+  id          String   @id @default(cuid())
+  examId      String
+  userId      String
+  totalScore  Int
+  quantScore  Int
+  verbalScore Int
+  diScore     Int
+  percentile  Float?
+  createdAt   DateTime @default(now())
+
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([examId])
+  @@index([userId])
+  @@map("scores")
+}
+
+// ============================================
+// QUESTIONS
+// ============================================
+
+model Question {
+  id                String       @id @default(cuid())
+  section           SectionType
+  type              QuestionType
+  topic             String
+  subtopic          String?
+  crSubtype         String?      // CR question subtype
+  difficulty        Int          // 205-805
+  stem              String
+  passage           String?
+  options           Json         // QuestionOption[]
+  correctAnswer     String
+  explanation       Json         // QuestionExplanation
+  timeEstimate      Int          @default(120) // seconds
+  psychometricWeight Float       @default(1.0)
+
+  // IRT Parameters
+  irtDifficulty     Float        @default(0)   // b
+  irtDiscrimination Float        @default(1)   // a
+  irtGuessing       Float        @default(0.2) // c
+
+  // DI-specific data
+  tableData         Json?        // TableData
+  chartData         Json?        // ChartData
+  sources           Json?        // DataSource[]
+  twoPartColumns    Json?        // string[]
+
+  // Validation
+  validated         Boolean      @default(false)
+  validationScore   Float?
+  sourceModel       String?      // which AI model generated this
+
+  // Vector reference
+  qdrantPointId     String?      // Qdrant vector ID
+
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Relations
+  examQuestions ExamQuestion[]
+  stats         QuestionStats?
+  tags          QuestionTag[]
+  mistakes      MistakeEntry[]
+
+  @@index([section])
+  @@index([type])
+  @@index([topic])
+  @@index([difficulty])
+  @@index([validated])
+  @@map("questions")
+}
+
+model QuestionTag {
+  id         String @id @default(cuid())
+  questionId String
+  tag        String
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, tag])
+  @@index([tag])
+  @@map("question_tags")
+}
+
+model QuestionStats {
+  id                String @id @default(cuid())
+  questionId        String @unique
+  timesServed       Int    @default(0)
+  timesCorrect      Int    @default(0)
+  avgTimeTaken      Float  @default(0)
+  // Recalibrated IRT params from real data
+  calibratedDifficulty     Float?
+  calibratedDiscrimination Float?
+  lastCalibrated           DateTime?
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("question_stats")
+}
+
+// ============================================
+// LEARNING — FLASHCARDS
+// ============================================
+
+model Flashcard {
+  id          String        @id @default(cuid())
+  userId      String
+  type        FlashcardType @default(CONCEPT)
+  front       String
+  back        String
+  section     SectionType?
+  topic       String?
+  difficulty  Int?
+
+  // Spaced Repetition (Leitner + SM-2 hybrid)
+  box         Int           @default(1) // Leitner box 1-5
+  easeFactor  Float         @default(2.5)
+  interval    Int           @default(1) // days
+  repetitions Int           @default(0)
+  nextReview  DateTime      @default(now())
+  lastReview  DateTime?
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([nextReview])
+  @@index([type])
+  @@map("flashcards")
+}
+
+// ============================================
+// LEARNING — MISTAKE BOOK
+// ============================================
+
+model MistakeEntry {
+  id         String    @id @default(cuid())
+  userId     String
+  questionId String
+  examId     String?
+  errorType  ErrorType @default(CONCEPTUAL)
+  notes      String?
+  tags       Json // string[]
+  section    SectionType
+  topic      String
+  subtopic   String?
+  difficulty Int
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@index([userId])
+  @@index([errorType])
+  @@index([section])
+  @@index([topic])
+  @@map("mistake_entries")
+}
+
+// ============================================
+// LEARNING — STUDY PLANS
+// ============================================
+
+model StudyPlan {
+  id           String   @id @default(cuid())
+  userId       String
+  currentScore Int
+  targetScore  Int
+  examDate     DateTime
+  hoursPerDay  Float    @default(2)
+  plan         Json     // StudyRecommendation[]
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("study_plans")
+}
+
+// ============================================
+// LEARNING — KNOWLEDGE GRAPH
+// ============================================
+
+model KnowledgeNode {
+  id            String      @id @default(cuid())
+  section       SectionType
+  topic         String
+  subtopic      String?
+  conceptName   String
+  description   String?
+  prerequisites Json // string[] of node IDs
+
+  userKnowledge UserKnowledge[]
+
+  @@unique([section, topic, subtopic, conceptName])
+  @@map("knowledge_nodes")
+}
+
+model UserKnowledge {
+  id            String          @id @default(cuid())
+  userId        String
+  nodeId        String
+  status        KnowledgeStatus @default(LEARNING)
+  strength      Float           @default(0) // 0-1
+  lastPracticed DateTime?
+  updatedAt     DateTime        @updatedAt
+
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  node KnowledgeNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, nodeId])
+  @@index([userId])
+  @@map("user_knowledge")
+}
+
+// ============================================
+// AI TUTOR
+// ============================================
+
+model TutorSession {
+  id        String    @id @default(cuid())
+  userId    String
+  mode      TutorMode @default(BEGINNER)
+  title     String?
+  messages  Json // AIMessage[]
+  context   Json // user context snapshot
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("tutor_sessions")
+}
+
+// ============================================
+// REPORTS
+// ============================================
+
+model CoachReport {
+  id          String   @id @default(cuid())
+  userId      String
+  examId      String?
+  reportData  Json     // CoachReportData
+  generatedAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exam Exam? @relation(fields: [examId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("coach_reports")
+}
+
+// ============================================
+// ANALYTICS
+// ============================================
+
+model UserAnalytics {
+  id                 String      @id @default(cuid())
+  userId             String
+  date               DateTime
+  questionsAttempted Int         @default(0)
+  questionsCorrect   Int         @default(0)
+  avgTimeTaken       Float       @default(0)
+  topicBreakdown     Json // Record<topic, {attempted, correct}>
+  difficultyBreakdown Json // Record<difficulty, {attempted, correct}>
+  studyMinutes       Int         @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+  @@map("user_analytics")
+}
+
+// ============================================
+// ANTI-CHEAT
+// ============================================
+
+model AntiCheatEvent {
+  id        String   @id @default(cuid())
+  examId    String
+  eventType String   // TAB_SWITCH, WINDOW_BLUR, COPY_ATTEMPT, etc.
+  metadata  Json
+  timestamp DateTime @default(now())
+
+  @@index([examId])
+  @@index([eventType])
+  @@map("anti_cheat_events")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum Role {
+  STUDENT
+  TUTOR
+  ADMIN
+  INSTITUTE
+}
+
+enum AuthProvider {
+  CREDENTIALS
+  GOOGLE
+  GITHUB
+}
+
+enum ExamType {
+  PRACTICE
+  MOCK
+  ADAPTIVE
+  RETEST
+}
+
+enum ExamStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  ON_BREAK
+  COMPLETED
+  ABANDONED
+}
+
+enum SectionType {
+  QUANTITATIVE
+  VERBAL
+  DATA_INSIGHTS
+}
+
+enum SectionStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  REVIEW
+  COMPLETED
+}
+
+enum QuestionType {
+  PROBLEM_SOLVING
+  READING_COMPREHENSION
+  CRITICAL_REASONING
+  DATA_SUFFICIENCY
+  TABLE_ANALYSIS
+  MULTI_SOURCE_REASONING
+  GRAPHICS_INTERPRETATION
+  TWO_PART_ANALYSIS
+}
+
+enum FlashcardType {
+  CONCEPT
+  FORMULA
+  STRATEGY
+  TRAP
+  VOCABULARY
+}
+
+enum ErrorType {
+  CONCEPTUAL
+  CALCULATION
+  READING
+  TIME_PRESSURE
+  CARELESS
+}
+
+enum TutorMode {
+  BEGINNER
+  INTERMEDIATE
+  EXPERT
+  VISUAL
+  COACH
+}
+
+enum KnowledgeStatus {
+  LEARNING
+  MASTERED
+  FORGOTTEN
+}
