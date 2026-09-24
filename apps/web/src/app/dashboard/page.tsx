@@ -3,47 +3,95 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 
-// Mock data — will be replaced with API calls
-const mockStats = {
-  totalExams: 12,
-  avgScore: 645,
-  streakDays: 7,
-  questionsToday: 42,
-  accuracyToday: 74,
-  predictedScore: 680,
-  targetScore: 720,
-};
-
-const mockRecentExams = [
-  { id: "1", type: "MOCK", score: 655, date: "2026-06-12", sections: { q: 78, v: 74, di: 76 } },
-  { id: "2", type: "PRACTICE", score: 630, date: "2026-06-10", sections: { q: 75, v: 72, di: 73 } },
-  { id: "3", type: "ADAPTIVE", score: 640, date: "2026-06-08", sections: { q: 76, v: 73, di: 74 } },
-  { id: "4", type: "MOCK", score: 620, date: "2026-06-05", sections: { q: 74, v: 71, di: 72 } },
-];
-
-const mockWeakAreas = [
-  { topic: "Number Properties", section: "Quant", accuracy: 45 },
-  { topic: "Critical Reasoning", section: "Verbal", accuracy: 52 },
-  { topic: "Data Sufficiency", section: "DI", accuracy: 48 },
-  { topic: "Word Problems", section: "Quant", accuracy: 55 },
-];
+interface DashboardData {
+  user?: { name?: string; email?: string };
+  targetScore?: number;
+  totalExams: number;
+  avgScore: number;
+  scoreHistory: { date: string; score: number }[];
+  topicPerformance: {
+    topic: string;
+    section: string;
+    accuracy: number;
+    questionsAttempted: number;
+    avgTime: number;
+  }[];
+  recentExams: {
+    id: string;
+    type: string;
+    totalScore: number;
+    completedAt: string;
+    duration: number;
+  }[];
+  streakDays: number;
+  questionsToday: number;
+  accuracyToday: number;
+}
 
 export default function DashboardPage() {
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [user, setUser] = useState<{ name?: string; email?: string } | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const scoreProgress = ((mockStats.avgScore - 205) / (805 - 205)) * 100;
-  const targetProgress = ((mockStats.targetScore - 205) / (805 - 205)) * 100;
+  useEffect(() => {
+    setMounted(true);
+
+    async function loadDashboard() {
+      try {
+        const [userRes, dashRes] = await Promise.all([
+          fetch("/api/v1/auth/me"),
+          fetch("/api/v1/analytics/dashboard"),
+        ]);
+
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          setUser(userData);
+        }
+
+        if (dashRes.ok) {
+          const dashData = await dashRes.json();
+          setData(dashData);
+        }
+      } catch (err) {
+        console.error("Failed to load user-specific dashboard data:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadDashboard();
+  }, []);
+
+  const totalExams = data?.totalExams ?? 0;
+  const avgScore = data?.avgScore && data.avgScore > 0 ? data.avgScore : 0;
+  const targetScore = data?.targetScore || 705; // User target score or standard 705
+  const streakDays = data?.streakDays ?? 0;
+  const questionsToday = data?.questionsToday ?? 0;
+  const accuracyToday = data?.accuracyToday ?? 0;
+  const recentExams = data?.recentExams || [];
+
+  // Weak areas calculated from actual question attempts
+  const weakAreas = (data?.topicPerformance || [])
+    .filter((t) => t.accuracy < 75)
+    .sort((a, b) => a.accuracy - b.accuracy)
+    .slice(0, 4);
+
+  const predictedScore = avgScore > 0 ? Math.min(avgScore + 20, 805) : "—";
+  const scoreProgress = avgScore > 0 ? ((avgScore - 205) / (805 - 205)) * 100 : 0;
+  const targetProgress = ((targetScore - 205) / (805 - 205)) * 100;
+
+  const displayName = user?.name || data?.user?.name || user?.email?.split("@")[0] || "Student";
 
   return (
     <div style={{ opacity: mounted ? 1 : 0, transition: "opacity 0.5s" }}>
       {/* Header */}
       <div style={{ marginBottom: "32px" }}>
         <h1 style={{ fontSize: "28px", fontWeight: 700, color: "#f1f5f9", marginBottom: "4px" }}>
-          Welcome back 👋
+          Welcome back, {displayName} 👋
         </h1>
         <p style={{ fontSize: "14px", color: "#94a3b8" }}>
-          Your GMAT Focus preparation dashboard. {mockStats.streakDays}-day streak! 🔥
+          Your personalized GMAT Focus preparation dashboard. {streakDays > 0 ? `${streakDays}-day streak! 🔥` : "Let's build your study momentum today!"}
         </p>
       </div>
 
@@ -51,9 +99,9 @@ export default function DashboardPage() {
       <div className="dashboard-grid" style={{ marginBottom: "24px" }}>
         <div className="stat-card animate-glow">
           <div className="stat-label">Current Score</div>
-          <div className="stat-value">{mockStats.avgScore}</div>
+          <div className="stat-value">{avgScore > 0 ? avgScore : "—"}</div>
           <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "8px" }}>
-            Target: {mockStats.targetScore}
+            Target: {targetScore} {totalExams > 0 ? `(${totalExams} mock${totalExams > 1 ? "s" : ""} completed)` : "(Take 1st mock)"}
           </div>
           <div style={{
             marginTop: "12px",
@@ -88,17 +136,19 @@ export default function DashboardPage() {
             background: "linear-gradient(135deg, #10b981, #059669)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
-          }}>{mockStats.predictedScore}</div>
+          }}>
+            {predictedScore}
+          </div>
           <div style={{ fontSize: "12px", color: "#10b981", marginTop: "8px" }}>
-            ↑ +35 from last week
+            {avgScore > 0 ? `GMAT Focus CAT Est.` : "Complete diagnostic exam"}
           </div>
         </div>
 
         <div className="stat-card">
           <div className="stat-label">Today's Progress</div>
-          <div className="stat-value">{mockStats.questionsToday}</div>
+          <div className="stat-value">{questionsToday}</div>
           <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "8px" }}>
-            questions · {mockStats.accuracyToday}% accuracy
+            questions · {questionsToday > 0 ? `${accuracyToday}% accuracy` : "No questions yet today"}
           </div>
         </div>
 
@@ -108,9 +158,11 @@ export default function DashboardPage() {
             background: "linear-gradient(135deg, #f59e0b, #ef4444)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
-          }}>{mockStats.streakDays}</div>
+          }}>
+            {streakDays}
+          </div>
           <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "8px" }}>
-            consecutive days 🔥
+            {streakDays > 0 ? "consecutive days 🔥" : "Practice daily to start streak"}
           </div>
         </div>
       </div>
@@ -172,42 +224,64 @@ export default function DashboardPage() {
               View All →
             </Link>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            {mockRecentExams.map((exam) => (
-              <div
-                key={exam.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "14px 16px",
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: "10px",
-                  cursor: "pointer",
-                  transition: "all var(--transition-fast)",
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: "14px", fontWeight: 600, color: "#f1f5f9" }}>
-                    {exam.type === "MOCK" ? "Full Mock Exam" : exam.type === "PRACTICE" ? "Practice Session" : "Adaptive Drill"}
+
+          {recentExams.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {recentExams.map((exam) => (
+                <Link
+                  key={exam.id}
+                  href={`/exam/${exam.id}/results`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "14px 16px",
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: "10px",
+                    textDecoration: "none",
+                    cursor: "pointer",
+                    transition: "all var(--transition-fast)",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: "14px", fontWeight: 600, color: "#f1f5f9" }}>
+                      {exam.type === "MOCK" ? "Full-Length Mock Exam" : exam.type === "PRACTICE" ? "Practice Session" : "Adaptive Drill"}
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
+                      {new Date(exam.completedAt).toLocaleDateString()} · {Math.round(exam.duration / 60)} mins
+                    </div>
                   </div>
-                  <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
-                    {exam.date} · Q{exam.sections.q} V{exam.sections.v} DI{exam.sections.di}
+                  <div style={{
+                    fontSize: "20px",
+                    fontWeight: 800,
+                    background: exam.totalScore >= 650 ? "linear-gradient(135deg, #10b981, #059669)" : "linear-gradient(135deg, #f59e0b, #d97706)",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                  }}>
+                    {exam.totalScore}
                   </div>
-                </div>
-                <div style={{
-                  fontSize: "20px",
-                  fontWeight: 800,
-                  background: exam.score >= 650 ? "linear-gradient(135deg, #10b981, #059669)" : "linear-gradient(135deg, #f59e0b, #d97706)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                }}>
-                  {exam.score}
-                </div>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div style={{ textAlign: "center", padding: "32px 16px" }}>
+              <div style={{ fontSize: "36px", marginBottom: "8px" }}>📝</div>
+              <div style={{ fontSize: "15px", fontWeight: 600, color: "#f1f5f9", marginBottom: "4px" }}>
+                No Exams Completed Yet
               </div>
-            ))}
-          </div>
+              <p style={{ fontSize: "13px", color: "#94a3b8", maxWidth: "320px", margin: "0 auto 16px" }}>
+                Take your first full-length GMAT Focus mock exam (64 questions / 2h 15m) to establish your score baseline.
+              </p>
+              <Link
+                href="/exam/new"
+                className="btn-primary"
+                style={{ padding: "8px 20px", textDecoration: "none", fontSize: "13px", display: "inline-block" }}
+              >
+                Start Full Mock Exam →
+              </Link>
+            </div>
+          )}
         </div>
 
         {/* Weak Areas */}
@@ -228,67 +302,86 @@ export default function DashboardPage() {
               Full Analysis →
             </Link>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-            {mockWeakAreas.map((area, i) => (
-              <div key={i}>
-                <div style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: "6px",
-                }}>
-                  <span style={{ fontSize: "13px", fontWeight: 600, color: "#f1f5f9" }}>
-                    {area.topic}
-                  </span>
-                  <span style={{
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    color: area.accuracy < 50 ? "#ef4444" : "#f59e0b",
-                  }}>
-                    {area.accuracy}%
-                  </span>
-                </div>
-                <div style={{
-                  height: "6px",
-                  background: "rgba(255,255,255,0.05)",
-                  borderRadius: "3px",
-                  overflow: "hidden",
-                }}>
-                  <div style={{
-                    height: "100%",
-                    width: `${area.accuracy}%`,
-                    background: area.accuracy < 50
-                      ? "linear-gradient(90deg, #ef4444, #dc2626)"
-                      : "linear-gradient(90deg, #f59e0b, #d97706)",
-                    borderRadius: "3px",
-                    transition: "width 1s ease-out",
-                  }} />
-                </div>
-                <div style={{
-                  fontSize: "11px",
-                  color: "#64748b",
-                  marginTop: "4px",
-                }}>
-                  {area.section}
-                </div>
-              </div>
-            ))}
-          </div>
 
-          <Link
-            href="/exam/new?type=retest"
-            className="btn-primary"
-            style={{
-              display: "block",
-              textAlign: "center",
-              marginTop: "20px",
-              textDecoration: "none",
-              fontSize: "13px",
-              padding: "10px",
-            }}
-          >
-            🎯 Practice Weak Areas
-          </Link>
+          {weakAreas.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              {weakAreas.map((area, i) => (
+                <div key={i}>
+                  <div style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "6px",
+                  }}>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#f1f5f9" }}>
+                      {area.topic}
+                    </span>
+                    <span style={{
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      color: area.accuracy < 50 ? "#ef4444" : "#f59e0b",
+                    }}>
+                      {area.accuracy}%
+                    </span>
+                  </div>
+                  <div style={{
+                    height: "6px",
+                    background: "rgba(255,255,255,0.05)",
+                    borderRadius: "3px",
+                    overflow: "hidden",
+                  }}>
+                    <div style={{
+                      height: "100%",
+                      width: `${area.accuracy}%`,
+                      background: area.accuracy < 50
+                        ? "linear-gradient(90deg, #ef4444, #dc2626)"
+                        : "linear-gradient(90deg, #f59e0b, #d97706)",
+                      borderRadius: "3px",
+                      transition: "width 1s ease-out",
+                    }} />
+                  </div>
+                  <div style={{
+                    fontSize: "11px",
+                    color: "#64748b",
+                    marginTop: "4px",
+                  }}>
+                    {area.section} · {area.questionsAttempted} attempted
+                  </div>
+                </div>
+              ))}
+              <Link
+                href="/exam/new?type=retest"
+                className="btn-primary"
+                style={{
+                  display: "block",
+                  textAlign: "center",
+                  marginTop: "16px",
+                  textDecoration: "none",
+                  fontSize: "13px",
+                  padding: "10px",
+                }}
+              >
+                🎯 Practice Weak Areas
+              </Link>
+            </div>
+          ) : (
+            <div style={{ textAlign: "center", padding: "32px 16px" }}>
+              <div style={{ fontSize: "36px", marginBottom: "8px" }}>📊</div>
+              <div style={{ fontSize: "15px", fontWeight: 600, color: "#f1f5f9", marginBottom: "4px" }}>
+                Diagnostic in Progress
+              </div>
+              <p style={{ fontSize: "13px", color: "#94a3b8", maxWidth: "320px", margin: "0 auto 16px" }}>
+                Solve questions in practice sessions or mock exams to reveal your specific strengths and priority areas.
+              </p>
+              <Link
+                href="/dashboard/questions"
+                className="btn-secondary"
+                style={{ padding: "8px 20px", textDecoration: "none", fontSize: "13px", display: "inline-block" }}
+              >
+                Explore Question Bank →
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </div>

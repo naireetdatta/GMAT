@@ -4,22 +4,10 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 // ============================================
-// Types for exam state
+// Types and Mock Questions
 // ============================================
 
-interface ExamQuestionData {
-  id: string;
-  examQuestionId?: string;
-  stem: string;
-  passage?: string;
-  type: string;
-  options: { id: string; label: string; text: string }[];
-  section: string;
-  topic: string;
-  difficulty: number;
-  tableData?: { headers: string[]; rows: string[][]; sortableColumns: number[] };
-  sources?: { id: string; title: string; content: string; type: string }[];
-}
+import { fallbackMockQuestions, ExamQuestionData } from "@web/data/mock-exam-questions";
 
 interface QuestionState {
   questionId: string;
@@ -32,125 +20,6 @@ interface QuestionState {
 }
 
 type ExamPhase = "loading" | "section-select" | "active" | "review" | "break" | "submitting" | "results";
-
-// ============================================
-// Fallback Mock Questions (for offline/demo use)
-// ============================================
-
-const fallbackMockQuestions: Record<string, ExamQuestionData[]> = {
-  QUANTITATIVE: Array.from({ length: 21 }, (_, i) => ({
-    id: `q-quant-${i + 1}`,
-    stem: `If x² + 5x + 6 = 0, and y = ${i + 2}x - ${i + 1}, what is the value of y when x is the larger root of the equation?`,
-    type: "PROBLEM_SOLVING",
-    section: "QUANTITATIVE",
-    topic: i % 2 === 0 ? "ALGEBRA" : "ARITHMETIC",
-    difficulty: 405 + Math.floor(i * 20),
-    options: [
-      { id: "A", label: "A", text: `${i * 2 - 3}` },
-      { id: "B", label: "B", text: `${i * 2 - 1}` },
-      { id: "C", label: "C", text: `${i * 2 + 1}` },
-      { id: "D", label: "D", text: `${i * 2 + 3}` },
-      { id: "E", label: "E", text: `${i * 2 + 5}` },
-    ],
-  })),
-  VERBAL: Array.from({ length: 23 }, (_, i) => ({
-    id: `q-verbal-${i + 1}`,
-    stem:
-      i % 3 === 0
-        ? "The author's primary purpose in the passage is to:"
-        : i % 3 === 1
-          ? `Which of the following, if true, would most ${i % 2 === 0 ? "strengthen" : "weaken"} the argument above?`
-          : "It can be inferred from the passage that the author would most likely agree with which of the following?",
-    passage:
-      i % 3 === 0 || i % 3 === 2
-        ? `Recent research in behavioral economics has challenged the traditional assumption that market participants act as perfectly rational agents. Studies by Kahneman and Tversky demonstrated that individuals systematically deviate from rational choice theory in predictable ways, exhibiting cognitive biases such as loss aversion, anchoring, and the availability heuristic. These findings have profound implications for financial regulation, consumer protection policy, and the design of public health interventions. Critics argue, however, that laboratory findings may not translate directly to real-world market conditions, where competitive pressures and institutional structures may mitigate individual cognitive limitations. Furthermore, some economists contend that while individual behavior may be irrational, market-level outcomes can still approximate rational equilibria through aggregation effects and arbitrage opportunities.`
-        : undefined,
-    type: i % 3 === 0 || i % 3 === 2 ? "READING_COMPREHENSION" : "CRITICAL_REASONING",
-    section: "VERBAL",
-    topic: i % 3 === 1 ? "CRITICAL_REASONING" : "READING_COMPREHENSION",
-    difficulty: 405 + Math.floor(i * 18),
-    options: [
-      { id: "A", label: "A", text: "Advocate for a new theoretical framework in economics" },
-      { id: "B", label: "B", text: "Present evidence that challenges a prevailing assumption" },
-      { id: "C", label: "C", text: "Reconcile two opposing viewpoints in behavioral science" },
-      { id: "D", label: "D", text: "Critique the methodology of recent experimental studies" },
-      { id: "E", label: "E", text: "Evaluate the practical applications of academic research" },
-    ],
-  })),
-  DATA_INSIGHTS: Array.from({ length: 20 }, (_, i) => ({
-    id: `q-di-${i + 1}`,
-    stem:
-      i % 5 === 0
-        ? "Is x > 0?\n\n(1) x³ > 0\n(2) x² - x > 0"
-        : i % 5 === 1
-          ? "Based on the data in the table, select True or False for each statement."
-          : i % 5 === 2
-            ? "Use the information from the sources to answer the question."
-            : i % 5 === 3
-              ? "Based on the graph, the ratio of the value in 2024 to the value in 2020 is closest to:"
-              : "Select one value for each column to satisfy the given conditions.",
-    type: ["DATA_SUFFICIENCY", "TABLE_ANALYSIS", "MULTI_SOURCE_REASONING", "GRAPHICS_INTERPRETATION", "TWO_PART_ANALYSIS"][i % 5],
-    section: "DATA_INSIGHTS",
-    topic: ["DATA_SUFFICIENCY", "TABLE_ANALYSIS", "MULTI_SOURCE_REASONING", "GRAPHICS_INTERPRETATION", "TWO_PART_ANALYSIS"][i % 5],
-    difficulty: 405 + Math.floor(i * 20),
-    tableData:
-      i % 5 === 1
-        ? {
-            headers: ["Company", "Revenue ($M)", "Growth (%)", "Employees", "Market Cap ($B)"],
-            rows: [
-              ["TechCorp", "2,450", "15.3", "12,500", "45.2"],
-              ["DataFlow", "1,820", "22.7", "8,300", "38.1"],
-              ["CloudNet", "3,100", "8.9", "18,200", "62.5"],
-              ["AIVenture", "980", "45.2", "3,200", "28.7"],
-              ["SecureIO", "1,550", "12.1", "6,800", "22.4"],
-            ],
-            sortableColumns: [0, 1, 2, 3, 4],
-          }
-        : undefined,
-    sources:
-      i % 5 === 2
-        ? [
-            {
-              id: "s1",
-              title: "Email from VP Sales",
-              content:
-                "Q3 projections indicate a 15% increase in enterprise contracts, primarily driven by the APAC region. However, customer acquisition cost has risen by 8% quarter-over-quarter.",
-              type: "text",
-            },
-            {
-              id: "s2",
-              title: "Financial Summary",
-              content:
-                "Total revenue: $45.2M (Q3) vs $42.1M (Q2). Operating margin: 18.3% (Q3) vs 20.1% (Q2). Cash reserves: $128M.",
-              type: "text",
-            },
-            {
-              id: "s3",
-              title: "Market Report",
-              content:
-                "Industry growth rate: 12.5% annually. Average customer retention: 87%. Top competitor revenue growth: 18% YoY.",
-              type: "text",
-            },
-          ]
-        : undefined,
-    options:
-      i % 5 === 0
-        ? [
-            { id: "A", label: "A", text: "Statement (1) ALONE is sufficient, but statement (2) alone is not sufficient." },
-            { id: "B", label: "B", text: "Statement (2) ALONE is sufficient, but statement (1) alone is not sufficient." },
-            { id: "C", label: "C", text: "BOTH statements TOGETHER are sufficient, but NEITHER statement ALONE is sufficient." },
-            { id: "D", label: "D", text: "EACH statement ALONE is sufficient." },
-            { id: "E", label: "E", text: "Statements (1) and (2) TOGETHER are NOT sufficient." },
-          ]
-        : [
-            { id: "A", label: "A", text: "Option A" },
-            { id: "B", label: "B", text: "Option B" },
-            { id: "C", label: "C", text: "Option C" },
-            { id: "D", label: "D", text: "Option D" },
-            { id: "E", label: "E", text: "Option E" },
-          ],
-  })),
-};
 
 const SECTION_TIME = 45 * 60; // 45 minutes in seconds
 const SECTION_NAMES: Record<string, string> = {
@@ -216,6 +85,30 @@ export default function ExamPage() {
         ];
       }
 
+      let tableData = q.tableData;
+      if (typeof tableData === "string") {
+        try {
+          tableData = JSON.parse(tableData);
+        } catch {
+          tableData = null;
+        }
+      }
+      if (!tableData || !Array.isArray(tableData.headers) || !Array.isArray(tableData.rows)) {
+        tableData = undefined;
+      }
+
+      let sources = q.sources;
+      if (typeof sources === "string") {
+        try {
+          sources = JSON.parse(sources);
+        } catch {
+          sources = undefined;
+        }
+      }
+      if (!Array.isArray(sources) || sources.length === 0) {
+        sources = undefined;
+      }
+
       return {
         id: q.id || `q-${index}`,
         examQuestionId: eq.id,
@@ -226,8 +119,8 @@ export default function ExamPage() {
         section: q.section || section.section,
         topic: q.topic || "GENERAL",
         difficulty: q.difficulty || 500,
-        tableData: q.tableData,
-        sources: q.sources,
+        tableData,
+        sources,
       };
     });
   };
@@ -375,7 +268,7 @@ export default function ExamPage() {
   // Init question states when section changes in local offline fallback
   useEffect(() => {
     if (currentSection && !questionStates[currentSection]) {
-      const states = questions.map((q) => ({
+      const states = questions.map((q: ExamQuestionData) => ({
         questionId: q.id,
         examQuestionId: q.examQuestionId,
         userAnswer: null,
@@ -446,7 +339,9 @@ export default function ExamPage() {
 
     // Send answer to server if connected
     if (!isOfflineMode && examData) {
-      const activeSection = examData.sections?.[currentSectionIndex];
+      const activeSection =
+        examData.sections?.find((s: any) => s.section === currentSection) ||
+        examData.sections?.[currentSectionIndex];
       if (activeSection) {
         try {
           const res = await fetch(
@@ -539,7 +434,9 @@ export default function ExamPage() {
 
     // Call server complete endpoint if connected
     if (!isOfflineMode && examData) {
-      const activeSection = examData.sections?.[currentSectionIndex];
+      const activeSection =
+        examData.sections?.find((s: any) => s.section === currentSection) ||
+        examData.sections?.[currentSectionIndex];
       if (activeSection) {
         try {
           const res = await fetch(`/api/v1/exams/${examId}/sections/${activeSection.id}/complete`, {
@@ -603,7 +500,7 @@ export default function ExamPage() {
     transitionToNextSection();
   };
 
-  const transitionToNextSection = () => {
+  const transitionToNextSection = async () => {
     const nextIdx = currentSectionIndex + 1;
     setCurrentSectionIndex(nextIdx);
     setCurrentQuestionIndex(0);
@@ -611,11 +508,82 @@ export default function ExamPage() {
     setEditsRemaining(3);
 
     const nextSectionType = sectionOrder[nextIdx];
-    if (examData?.sections?.[nextIdx]) {
-      const nextQuestions = parseSectionQuestions(examData.sections[nextIdx]);
+
+    // Refresh exam data from backend to ensure latest allocated questions
+    if (!isOfflineMode && examId) {
+      try {
+        const res = await fetch(`/api/v1/exams/${examId}`);
+        if (res.ok) {
+          const freshData = await res.json();
+          setExamData(freshData);
+          const nextSec =
+            freshData.sections?.find((s: any) => s.section === nextSectionType) ||
+            freshData.sections?.[nextIdx];
+          if (nextSec) {
+            const nextQuestions = parseSectionQuestions(nextSec);
+            setActiveQuestions(nextQuestions);
+            const nextStates: QuestionState[] = nextQuestions.map((q, idx) => {
+              const serverEq = nextSec?.questions?.[idx];
+              return {
+                questionId: q.id,
+                examQuestionId: serverEq?.id || q.examQuestionId,
+                userAnswer: serverEq?.userAnswer || null,
+                isFlagged: serverEq?.isFlagged || false,
+                isSkipped: serverEq ? serverEq.userAnswer === null : true,
+                timeTaken: serverEq?.timeTaken || 0,
+                isEdited: serverEq?.isEdited || false,
+              };
+            });
+            setQuestionStates((prev) => ({
+              ...prev,
+              [nextSectionType]: nextStates,
+            }));
+            setPhase("active");
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to refresh exam during section transition:", err);
+      }
+    }
+
+    const nextSec =
+      examData?.sections?.find((s: any) => s.section === nextSectionType) ||
+      examData?.sections?.[nextIdx];
+    if (nextSec) {
+      const nextQuestions = parseSectionQuestions(nextSec);
       setActiveQuestions(nextQuestions);
+      const nextStates: QuestionState[] = nextQuestions.map((q, idx) => {
+        const serverEq = nextSec?.questions?.[idx];
+        return {
+          questionId: q.id,
+          examQuestionId: serverEq?.id || q.examQuestionId,
+          userAnswer: serverEq?.userAnswer || null,
+          isFlagged: serverEq?.isFlagged || false,
+          isSkipped: serverEq ? serverEq.userAnswer === null : true,
+          timeTaken: serverEq?.timeTaken || 0,
+          isEdited: serverEq?.isEdited || false,
+        };
+      });
+      setQuestionStates((prev) => ({
+        ...prev,
+        [nextSectionType]: nextStates,
+      }));
     } else {
-      setActiveQuestions(fallbackMockQuestions[nextSectionType] || []);
+      const fallbackQs = fallbackMockQuestions[nextSectionType] || [];
+      setActiveQuestions(fallbackQs);
+      setQuestionStates((prev) => ({
+        ...prev,
+        [nextSectionType]: fallbackQs.map((q: ExamQuestionData) => ({
+          questionId: q.id,
+          examQuestionId: q.examQuestionId,
+          userAnswer: null,
+          isFlagged: false,
+          isSkipped: true,
+          timeTaken: 0,
+          isEdited: false,
+        })),
+      }));
     }
 
     setPhase("active");
@@ -888,7 +856,49 @@ function QuestionContent({
         }}>
           {question.type.replace(/_/g, " ")}
         </span>
+        {question.section === "DATA_INSIGHTS" && (
+          <span style={{
+            padding: "3px 10px",
+            background: "rgba(16, 185, 129, 0.1)",
+            border: "1px solid rgba(16, 185, 129, 0.2)",
+            borderRadius: "6px",
+            fontSize: "11px",
+            fontWeight: 600,
+            color: "#34d399",
+          }}>
+            🧮 Calculator Allowed
+          </span>
+        )}
       </div>
+
+      {question.type === "DATA_SUFFICIENCY" && (
+        <div style={{
+          padding: "10px 14px",
+          background: "rgba(59, 130, 246, 0.05)",
+          border: "1px solid rgba(59, 130, 246, 0.15)",
+          borderRadius: "8px",
+          fontSize: "12px",
+          color: "#93c5fd",
+          marginBottom: "16px",
+          lineHeight: "1.5",
+        }}>
+          💡 <strong>Data Sufficiency Guide:</strong> A: (1) Alone is sufficient | B: (2) Alone is sufficient | C: Both Together are sufficient | D: Each Alone is sufficient | E: Neither is sufficient.
+        </div>
+      )}
+      {question.type === "TWO_PART_ANALYSIS" && (
+        <div style={{
+          padding: "10px 14px",
+          background: "rgba(245, 158, 11, 0.05)",
+          border: "1px solid rgba(245, 158, 11, 0.2)",
+          borderRadius: "8px",
+          fontSize: "12px",
+          color: "#fcd34d",
+          marginBottom: "16px",
+          lineHeight: "1.5",
+        }}>
+          🎯 <strong>Two-Part Analysis:</strong> Evaluate both criteria in the scenario and select the choice that fulfills both requirements.
+        </div>
+      )}
 
       <div style={{
         fontSize: "16px",
@@ -901,7 +911,7 @@ function QuestionContent({
       </div>
 
       <div>
-        {question.options.map((option) => (
+        {question.options.map((option: { id: string; label: string; text: string }) => (
           <div
             key={option.id}
             className={`answer-option ${state?.userAnswer === option.id ? "selected" : ""}`}
@@ -918,14 +928,18 @@ function QuestionContent({
   );
 }
 
-function SortableTable({ data }: { data: { headers: string[]; rows: string[][]; sortableColumns: number[] } }) {
+function SortableTable({ data }: { data?: { headers?: string[]; rows?: string[][]; sortableColumns?: number[] } }) {
   const [sortCol, setSortCol] = useState<number | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
 
+  if (!data || !Array.isArray(data.headers) || !Array.isArray(data.rows) || data.rows.length === 0) {
+    return null;
+  }
+
   const sortedRows = [...data.rows].sort((a, b) => {
     if (sortCol === null) return 0;
-    const aVal = a[sortCol];
-    const bVal = b[sortCol];
+    const aVal = a[sortCol] || "";
+    const bVal = b[sortCol] || "";
     const numA = parseFloat(aVal.replace(/[,$%]/g, ""));
     const numB = parseFloat(bVal.replace(/[,$%]/g, ""));
     if (!isNaN(numA) && !isNaN(numB)) {
@@ -981,8 +995,12 @@ function SortableTable({ data }: { data: { headers: string[]; rows: string[][]; 
   );
 }
 
-function SourceTabs({ sources }: { sources: { id: string; title: string; content: string; type: string }[] }) {
+function SourceTabs({ sources }: { sources?: { id: string; title: string; content: string; type: string }[] }) {
   const [activeTab, setActiveTab] = useState(0);
+
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return null;
+  }
 
   return (
     <div>

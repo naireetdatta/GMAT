@@ -52,7 +52,8 @@ export default function StudyPlanPage() {
     try {
       const res = await fetch("/api/v1/study-plan/active");
       if (res.ok) {
-        const data = await res.json();
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : null;
         setActivePlan(data);
       }
     } catch (err) {
@@ -80,7 +81,8 @@ export default function StudyPlanPage() {
       });
 
       if (res.ok) {
-        const newPlan = await res.json();
+        const text = await res.text();
+        const newPlan = text ? JSON.parse(text) : null;
         setActivePlan(newPlan);
       }
     } catch (err) {

@@ -1,15 +1,19 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { IrtService } from '../irt/irt.service';
 import { ScoringService } from './scoring.service';
-import { ExamStatus, SectionStatus, SectionType, ExamType } from '@prisma/client';
+import { ExamStatus, SectionStatus, SectionType, ExamType, QuestionType } from '@prisma/client';
+import { QuestionGeneratorService } from '../ai/question-generator.service';
 
 @Injectable()
 export class ExamService {
+  private readonly logger = new Logger(ExamService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly irtService: IrtService,
     private readonly scoringService: ScoringService,
+    private readonly questionGenerator: QuestionGeneratorService,
   ) {}
 
   async createExam(userId: string, type: ExamType, sectionOrder: SectionType[]) {
@@ -56,13 +60,21 @@ export class ExamService {
       payload: { userId, type, sectionOrder, startedAt: now },
     });
 
-    // Allocate questions for the first section
-    await this.allocateQuestionsForSection(
-      exam.sections[0].id,
-      sectionOrder[0],
-      sectionConfigs[sectionOrder[0]].questionCount,
-      0, // initial ability estimate
-    );
+    // Allocate questions for all sections up-front so questions are immediately ready
+    for (const section of exam.sections) {
+      await this.allocateQuestionsForSection(
+        section.id,
+        section.section,
+        sectionConfigs[section.section].questionCount,
+        0, // initial ability estimate
+        userId,
+      );
+    }
+
+    // In background, mint fresh AI questions so the question pool keeps growing
+    this.generateBackgroundQuestions(sectionOrder).catch((e) => {
+      this.logger.debug(`Background AI question seeding completed or skipped: ${e}`);
+    });
 
     return this.getExam(exam.id);
   }
@@ -112,8 +124,42 @@ export class ExamService {
       throw new BadRequestException('Section time has expired');
     }
 
-    const examQuestion = section.questions[questionIndex];
-    if (!examQuestion) throw new NotFoundException('Question not found');
+    let examQuestion =
+      section.questions.find((q) => q.orderIndex === questionIndex) ||
+      section.questions[questionIndex];
+
+    if (!examQuestion) {
+      // Auto-heal: find an available question not already in this section
+      const alreadyInSec = new Set(section.questions.map((q) => q.questionId));
+      const fallbackQ =
+        (await this.prisma.question.findFirst({
+          where: {
+            section: section.section,
+            validated: true,
+            id: { notIn: Array.from(alreadyInSec) },
+          },
+        })) ||
+        (await this.prisma.question.findFirst({
+          where: {
+            section: section.section,
+            id: { notIn: Array.from(alreadyInSec) },
+          },
+        })) ||
+        (await this.prisma.question.findFirst());
+
+      if (fallbackQ) {
+        examQuestion = await this.prisma.examQuestion.create({
+          data: {
+            sectionId,
+            questionId: fallbackQ.id,
+            orderIndex: questionIndex,
+          },
+          include: { question: true },
+        });
+      } else {
+        throw new NotFoundException('Question not found');
+      }
+    }
 
     const wasAlreadyAnswered = examQuestion.userAnswer !== null;
     const isChangingAnswer = wasAlreadyAnswered && examQuestion.userAnswer !== answer;
@@ -185,7 +231,9 @@ export class ExamService {
 
   async flagQuestion(examQuestionId: string) {
     const eq = await this.prisma.examQuestion.findUnique({ where: { id: examQuestionId } });
-    if (!eq) throw new NotFoundException('Question not found');
+    if (!eq) {
+      return { id: examQuestionId, isFlagged: false };
+    }
 
     return this.prisma.examQuestion.update({
       where: { id: examQuestionId },
@@ -258,6 +306,7 @@ export class ExamService {
         nextSection.section,
         sectionConfigs[nextSection.section] || 20,
         0,
+        exam.userId,
       );
 
       await this.recordEvent(examId, {
@@ -536,45 +585,190 @@ export class ExamService {
     sectionType: SectionType,
     count: number,
     initialAbility: number,
+    userId?: string,
   ) {
-    // Select questions using IRT-based adaptive selection
-    const availableQuestions = await this.prisma.question.findMany({
+    // Avoid double allocation if questions are already assigned
+    const existing = await this.prisma.examQuestion.count({
+      where: { sectionId },
+    });
+    if (existing >= count) {
+      return;
+    }
+
+    // 1. Identify questions already served to this user in any past exam
+    let seenQuestionIds: string[] = [];
+    if (userId) {
+      const pastAttempts = await this.prisma.examQuestion.findMany({
+        where: { section: { exam: { userId } } },
+        select: { questionId: true },
+      });
+      seenQuestionIds = pastAttempts.map((p) => p.questionId);
+    }
+
+    // 2. Select questions not yet seen by this user
+    let availableQuestions = await this.prisma.question.findMany({
       where: {
         section: sectionType,
         validated: true,
+        ...(seenQuestionIds.length > 0 ? { id: { notIn: seenQuestionIds } } : {}),
       },
       orderBy: { irtDifficulty: 'asc' },
     });
 
-    let selectedQuestions: typeof availableQuestions;
-
-    if (availableQuestions.length >= count) {
-      // Use IRT to select optimal questions
-      selectedQuestions = this.irtService.selectQuestions(
-        availableQuestions.map((q) => ({
-          id: q.id,
-          difficulty: q.irtDifficulty,
-          discrimination: q.irtDiscrimination,
-          guessing: q.irtGuessing,
-          topic: q.topic,
-        })),
-        initialAbility,
-        count,
-      ).map((selected) => availableQuestions.find((q) => q.id === selected.id)!);
-    } else {
-      // Not enough validated questions — use whatever we have
-      selectedQuestions = availableQuestions.slice(0, count);
+    if (availableQuestions.length < count) {
+      // Fallback: check unvalidated questions not yet seen
+      const unvalidated = await this.prisma.question.findMany({
+        where: {
+          section: sectionType,
+          validated: false,
+          ...(seenQuestionIds.length > 0 ? { id: { notIn: seenQuestionIds } } : {}),
+        },
+        orderBy: { irtDifficulty: 'asc' },
+      });
+      if (unvalidated.length > 0) {
+        availableQuestions.push(...unvalidated);
+      }
     }
 
-    // Create exam question entries
-    if (selectedQuestions.length > 0) {
+    // De-duplicate available questions by ID
+    const distinctMap = new Map<string, (typeof availableQuestions)[0]>();
+    for (const q of availableQuestions) {
+      distinctMap.set(q.id, q);
+    }
+
+    // 3. Runtime AI Question Generation: if bank has fewer unseen questions than needed, generate dynamically!
+    if (distinctMap.size < count) {
+      const needed = count - distinctMap.size;
+      const batchSize = 3;
+      for (let i = 0; i < needed; i += batchSize) {
+        const chunkCount = Math.min(batchSize, needed - i);
+        const promises = Array.from({ length: chunkCount }, (_, ci) => {
+          const idx = distinctMap.size + ci;
+          const topic = this.getTopicForSection(sectionType, idx);
+          const type = this.getTypeForSection(sectionType, idx);
+          return this.questionGenerator.generateAndSaveQuestion({
+            section: sectionType,
+            topic,
+            difficulty: 540 + ((idx % 6) * 35),
+            type,
+          }).catch((err) => {
+            this.logger.warn(`AI generation error for ${sectionType}: ${err}`);
+            return null;
+          });
+        });
+
+        const results = await Promise.all(promises);
+        for (const q of results) {
+          if (q && !distinctMap.has(q.id)) {
+            distinctMap.set(q.id, q as any);
+          }
+        }
+        if (distinctMap.size >= count) break;
+      }
+    }
+
+    // 4. In case user has taken dozens of exams and exhausted all unseen questions:
+    // Supplement from general pool ensuring NO question repeats within this section!
+    if (distinctMap.size < count) {
+      const generalBank = await this.prisma.question.findMany({
+        where: { section: sectionType },
+        orderBy: { updatedAt: 'asc' },
+      });
+      for (const q of generalBank) {
+        if (!distinctMap.has(q.id)) {
+          distinctMap.set(q.id, q);
+        }
+        if (distinctMap.size >= count) break;
+      }
+    }
+
+    const distinctQuestions = Array.from(distinctMap.values());
+    let selectedQuestions: typeof availableQuestions = [];
+
+    if (distinctQuestions.length >= count) {
+      // Use IRT to select optimal distinct questions
+      try {
+        selectedQuestions = this.irtService.selectQuestions(
+          distinctQuestions.map((q) => ({
+            id: q.id,
+            difficulty: q.irtDifficulty,
+            discrimination: q.irtDiscrimination,
+            guessing: q.irtGuessing,
+            topic: q.topic,
+          })),
+          initialAbility,
+          count,
+        ).map((selected) => distinctQuestions.find((q) => q.id === selected.id)!);
+      } catch {
+        selectedQuestions = distinctQuestions.slice(0, count);
+      }
+    } else {
+      selectedQuestions = distinctQuestions;
+    }
+
+    // 5. Create exam question entries with strictly unique questions (exact count)
+    const finalSelection = selectedQuestions.slice(0, count);
+    if (finalSelection.length > 0) {
       await this.prisma.examQuestion.createMany({
-        data: selectedQuestions.map((q, index) => ({
+        data: finalSelection.map((q, index) => ({
           sectionId,
           questionId: q.id,
           orderIndex: index,
         })),
+        skipDuplicates: true,
       });
+    }
+  }
+
+  private getTopicForSection(section: SectionType, index: number): string {
+    if (section === SectionType.QUANTITATIVE) {
+      const topics = [
+        'Algebra', 'Arithmetic', 'Word Problems', 'Ratios & Proportions',
+        'Percentages', 'Rates & Work', 'Statistics', 'Number Properties', 'Inequalities'
+      ];
+      return topics[index % topics.length];
+    }
+    if (section === SectionType.VERBAL) {
+      return index % 2 === 0 ? 'Critical Reasoning' : 'Reading Comprehension';
+    }
+    const diTopics = [
+      'Data Sufficiency', 'Table Analysis', 'Multi-Source Reasoning',
+      'Two-Part Analysis', 'Graphics Interpretation'
+    ];
+    return diTopics[index % diTopics.length];
+  }
+
+  private getTypeForSection(section: SectionType, index: number): QuestionType {
+    if (section === SectionType.QUANTITATIVE) {
+      return QuestionType.PROBLEM_SOLVING;
+    }
+    if (section === SectionType.VERBAL) {
+      return index % 2 === 0 ? QuestionType.CRITICAL_REASONING : QuestionType.READING_COMPREHENSION;
+    }
+    const diTypes = [
+      QuestionType.DATA_SUFFICIENCY,
+      QuestionType.TABLE_ANALYSIS,
+      QuestionType.MULTI_SOURCE_REASONING,
+      QuestionType.TWO_PART_ANALYSIS,
+      QuestionType.GRAPHICS_INTERPRETATION,
+    ];
+    return diTypes[index % diTypes.length];
+  }
+
+  private async generateBackgroundQuestions(sectionOrder: SectionType[]) {
+    for (const section of sectionOrder) {
+      try {
+        const topic = this.getTopicForSection(section, Math.floor(Math.random() * 10));
+        const type = this.getTypeForSection(section, Math.floor(Math.random() * 5));
+        await this.questionGenerator.generateAndSaveQuestion({
+          section,
+          topic,
+          difficulty: 600 + Math.floor(Math.random() * 120),
+          type,
+        });
+      } catch (e) {
+        // non-blocking
+      }
     }
   }
 

@@ -8,6 +8,14 @@ export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getDashboardData(userId: string) {
+    // 0. User metadata & preferences
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, email: true, preferences: true },
+    });
+    const prefs = (user?.preferences as any) || {};
+    const targetScore = prefs.targetScore || 705;
+
     // 1. Total exams and average score
     const scores = await this.prisma.score.findMany({
       where: { userId },
@@ -110,6 +118,11 @@ export class AnalyticsService {
     const topicPerformance = this.aggregateTopicPerformance(allAttempted);
 
     return {
+      user: {
+        name: user?.name,
+        email: user?.email,
+      },
+      targetScore,
       totalExams,
       avgScore,
       scoreHistory,
