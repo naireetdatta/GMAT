@@ -96,7 +96,7 @@ export class StudyPlanService {
       const dateString = date.toISOString().split('T')[0];
 
       // Standard split: 40% quant, 40% verbal, 20% DI/mocks
-      let section = SectionType.QUANTITATIVE;
+      let section: SectionType = SectionType.QUANTITATIVE;
       let topic = '';
       let type: 'practice' | 'review' | 'flashcards' | 'tutor' | 'mock' = 'practice';
       let desc = '';

@@ -93,6 +93,7 @@ model Exam {
   currentSection Int        @default(0)
   breakTaken     Boolean    @default(false)
   breakStartedAt DateTime?
+  breakDeadlineAt DateTime?
   startedAt      DateTime?
   completedAt    DateTime?
   totalScore     Int?
@@ -102,6 +103,7 @@ model Exam {
   sections ExamSection[]
   scores   Score[]
   reports  CoachReport[]
+  events   ExamEvent[]
 
   @@index([userId])
   @@index([status])
@@ -119,10 +121,12 @@ model ExamSection {
   abilityEstimate Float         @default(0)
   editsRemaining  Int           @default(3)
   startedAt       DateTime?
+  sectionDeadlineAt DateTime?
   completedAt     DateTime?
 
   exam      Exam           @relation(fields: [examId], references: [id], onDelete: Cascade)
   questions ExamQuestion[]
+  events    ExamEvent[]
 
   @@unique([examId, section])
   @@index([examId])
@@ -449,6 +453,24 @@ model AntiCheatEvent {
   @@index([examId])
   @@index([eventType])
   @@map("anti_cheat_events")
+}
+
+model ExamEvent {
+  id             String   @id @default(cuid())
+  examId         String
+  sectionId      String?
+  sequenceNumber Int      @default(0)
+  type           String   // ExamEventType
+  idempotencyKey String?  @unique
+  payload        Json
+  timestamp      DateTime @default(now())
+
+  exam    Exam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+  section ExamSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+
+  @@index([examId, sequenceNumber])
+  @@index([type])
+  @@map("exam_events")
 }
 
 // ============================================

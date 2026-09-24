@@ -59,10 +59,12 @@ export class IrtService {
     const p = this.probability(theta, a, b, c);
     if (p <= c || p >= 1) return 0;
 
-    const numerator = Math.pow(a, 2) * Math.pow(p - c, 2);
-    const denominator = Math.pow(1 - c, 2) * p * (1 - p);
+    // Correct Lord's 3PL Fisher Information function:
+    // I(theta) = a^2 * ((1 - p) / p) * ((p - c) / (1 - c))^2
+    const pStar = (p - c) / (1 - c);
+    const info = Math.pow(a, 2) * ((1 - p) / p) * Math.pow(pStar, 2);
 
-    return denominator > 0 ? numerator / denominator : 0;
+    return info > 0 ? info : 0;
   }
 
   /**

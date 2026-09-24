@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { 
-  BookOpen, Sparkles, Filter, AlertCircle, FileText, CheckCircle, HelpCircle, FileCheck, Edit, ArrowRight
+  BookOpen, Sparkles, Filter, AlertCircle, FileText, CheckCircle, HelpCircle, FileCheck, Edit, ArrowRight, ChevronRight
 } from "lucide-react";
 
 enum ErrorType {

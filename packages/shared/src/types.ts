@@ -26,6 +26,39 @@ export enum ExamStatus {
   ABANDONED = 'ABANDONED',
 }
 
+export enum ExamState {
+  NOT_STARTED = 'NOT_STARTED',
+  SECTION_INTRO = 'SECTION_INTRO',
+  QUESTION_ACTIVE = 'QUESTION_ACTIVE',
+  SECTION_REVIEW = 'SECTION_REVIEW',
+  BREAK_AVAILABLE = 'BREAK_AVAILABLE',
+  BREAK_ACTIVE = 'BREAK_ACTIVE',
+  SECTION_TRANSITION = 'SECTION_TRANSITION',
+  COMPLETED = 'COMPLETED',
+  EXPIRED = 'EXPIRED',
+  ABANDONED = 'ABANDONED',
+}
+
+export enum ExamEventType {
+  EXAM_STARTED = 'EXAM_STARTED',
+  SECTION_STARTED = 'SECTION_STARTED',
+  QUESTION_PRESENTED = 'QUESTION_PRESENTED',
+  ANSWER_SELECTED = 'ANSWER_SELECTED',
+  ANSWER_CHANGED = 'ANSWER_CHANGED',
+  QUESTION_BOOKMARKED = 'QUESTION_BOOKMARKED',
+  QUESTION_UNBOOKMARKED = 'QUESTION_UNBOOKMARKED',
+  SECTION_REVIEW_STARTED = 'SECTION_REVIEW_STARTED',
+  ANSWER_EDITED = 'ANSWER_EDITED',
+  SECTION_SUBMITTED = 'SECTION_SUBMITTED',
+  BREAK_STARTED = 'BREAK_STARTED',
+  BREAK_ENDED = 'BREAK_ENDED',
+  EXAM_EXPIRED = 'EXAM_EXPIRED',
+  EXAM_COMPLETED = 'EXAM_COMPLETED',
+  TELEMETRY_BLUR = 'TELEMETRY_BLUR',
+  TELEMETRY_FOCUS = 'TELEMETRY_FOCUS',
+  TELEMETRY_RECONNECT = 'TELEMETRY_RECONNECT',
+}
+
 export enum SectionType {
   QUANTITATIVE = 'QUANTITATIVE',
   VERBAL = 'VERBAL',
@@ -391,4 +424,43 @@ export interface AccuracyHeatmapData {
   difficulty: number;
   accuracy: number;
   count: number;
+}
+
+// ---- Event Sourcing & Telemetry Types ----
+
+export interface ExamEvent {
+  id?: string;
+  examId: string;
+  sectionId?: string;
+  sequenceNumber?: number;
+  type: ExamEventType;
+  timestamp?: Date;
+  idempotencyKey?: string;
+  payload: Record<string, unknown>;
+}
+
+// ---- Psychometric Types ----
+
+export interface AbilityEstimate {
+  theta: number;
+  standardError: number;
+  confidenceInterval?: {
+    lower: number;
+    upper: number;
+  };
+}
+
+export interface ScoreEstimateWithUncertainty {
+  estimatedScore: number;
+  scoreRange: [number, number];
+  confidence: 'High' | 'Moderate' | 'Provisional';
+  standardError: number;
+}
+
+export interface CATSelectionContext {
+  theta: number;
+  standardError: number;
+  section: SectionType;
+  questionIndex: number;
+  recentQuestionIds: string[];
 }

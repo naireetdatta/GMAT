@@ -163,18 +163,22 @@ graph TD
 4. `ExamService` batch-inserts `ExamQuestion` records referencing the selected question IDs with ascending `orderIndex` (0 to 20 for Quant, 0 to 22 for Verbal, 0 to 19 for DI).
 5. Returns exam payload to client; client navigates to `/exam/[id]`.
 
-#### Phase 3.3: Live Test Interface Rendering
-1. [`apps/web/src/app/exam/[id]/page.tsx`](file:///d:/GMAT/apps/web/src/app/exam/[id]/page.tsx) mounts.
-2. Initializes question states (answer: null, isFlagged: false, isSkipped: true, timeTaken: 0).
-3. Starts the 1-second interval timer.
-4. Renders section title, current question index ("Question 1 of 21"), countdown timer, flagging toggle, and section-specific widgets (split-view for RC passages, sortable table headers for Table Analysis, or on-screen calculator for DI).
+#### Phase 3.3: Live Test Interface Rendering & Server Clock Sync
+1. [`apps/web/src/app/exam/[id]/page.tsx`](file:///d:/GMAT/apps/web/src/app/exam/[id]/page.tsx) mounts and reads `params.id`.
+2. Fetches `GET /api/v1/exams/:id` and `/api/v1/exams/:id/sync`.
+3. Sets authoritative `timeRemaining` based on `sectionDeadlineAt` and server timestamp delta.
+4. Spawns a periodic 30-second synchronization heartbeat (`GET /api/v1/exams/:id/sections/:sectionId/sync`) to detect drift. If client drift exceeds 2 seconds, client timer re-aligns to the server deadline.
+5. If the section deadline has passed on the server (`isExpired = true`), `handleSectionComplete()` is automatically triggered.
 
 #### Phase 3.4: Answering & Dynamic IRT Ability Recalibration
 1. Student selects an answer choice (e.g. Option "C").
-2. Client sends `POST /api/v1/exams/:id/sections/:sectionId/answer` with `{ questionIndex, answer }`.
+2. Client sends `PATCH /api/v1/exams/:id/sections/:sectionId/answer` with `{ questionIndex, answer, idempotencyKey }`.
 3. In `ExamService.submitAnswer()`:
+   - Validates that `now <= sectionDeadlineAt`. Late submissions are rejected.
+   - If this is an answer change, checks `editsRemaining > 0`. If 0, rejects the edit with HTTP 400.
    - Compares student answer with `Question.correctAnswer`.
    - Sets `ExamQuestion.userAnswer`, `isCorrect`, `isSkipped = false`, `answeredAt = new Date()`.
+   - If changed, marks `isEdited = true` and decrements `ExamSection.editsRemaining`.
    - Compiles historical responses for all answered questions in the section.
    - Calls `IrtService.estimateAbility(responses)`:
      - Runs 61-point Gaussian quadrature integration between $-3.0$ and $+3.0$ with prior $\mathcal{N}(0, 1)$.
@@ -182,21 +186,22 @@ graph TD
        $$L(\theta|\mathbf{u}) = \prod [P_i(\theta)]^{u_i} [1 - P_i(\theta)]^{1 - u_i}$$
      - Calculates new Expected A Posteriori ability estimate $\hat{\theta}_{EAP}$.
    - Updates `ExamSection.abilityEstimate` with $\hat{\theta}_{EAP}$ in database.
-   - Returns `{ isCorrect, abilityEstimate }` to client.
+   - Records an `ANSWER_SUBMITTED` event in `ExamEvent` ledger.
+   - Returns `{ success: true, editsRemaining, isCorrect, userAnswer }` to client.
 
 #### Phase 3.5: Navigation, Pacing & Bookmarking
 1. Clicking **Next**: Computes elapsed time on current question via `Date.now() - questionStartTime`, updates accumulated `timeTaken`, and advances `currentQuestionIndex`.
-2. Clicking **Bookmark / Flag**: Dispatches `POST /api/v1/exams/questions/:examQuestionId/flag`, toggling `isFlagged` for review filtering.
+2. Clicking **Bookmark / Flag**: Dispatches `PATCH /api/v1/exams/questions/:examQuestionId/flag`, toggling `isFlagged` for review filtering in both UI and database.
 3. Reaching the last question in the section transitions the interface to `phase = "review"`.
 
 #### Phase 3.6: Section Review Screen & 3-Edit Limit Enforcement
-1. The **Review Screen** displays a complete grid of all questions in the section with their status: `Answered`, `Incomplete`, or `Flagged`.
-2. Displays prominent counter: **"Edits Remaining: X of 3"**.
+1. The **Review Screen** displays a complete grid of all questions in the section with their status: `Answered`, `Skipped`, or `Flagged`.
+2. Displays prominent counter: **"Edits Remaining: X of 3"** (synchronized with server `editsRemaining`).
 3. Student clicks on any question to inspect or change their response.
 4. If the student changes an already-submitted answer:
-   - Client checks `editsRemaining > 0`.
+   - Client and server enforce `editsRemaining > 0`.
    - If allowed, updates answer, marks `isEdited = true`, and decrements `editsRemaining`.
-   - If `editsRemaining === 0`, answer modifications are strictly blocked.
+   - If `editsRemaining === 0`, answer modifications are rejected both on client and server.
 5. Student clicks **"End Section"** to finalize.
 
 #### Phase 3.7: Section Completion & Scaled Scoring
@@ -214,10 +219,15 @@ graph TD
    - If this was the final section, triggers `completeExam(examId)`.
 
 #### Phase 3.8: Optional 10-Minute Break Management
-1. When moving between sections, the UI transitions to `phase = "break"`.
-2. Displays a 10-minute (600 seconds) countdown timer.
-3. Student can either take the break or click **"Skip Break & Continue"** immediately.
-4. When the break completes or is skipped, the next section begins (`phase = "active"`), starting the 45-minute countdown for Section 2.
+1. When moving between Section 1 & 2 or Section 2 & 3, if `!exam.breakTaken`, the UI transitions to `phase = "break"`.
+2. If student takes the break, client calls `POST /api/v1/exams/:id/break/start`:
+   - Server updates `exam.status = ON_BREAK`, `breakTaken = true`, `breakDeadlineAt = now + 600s`.
+   - Records `BREAK_STARTED` in `ExamEvent` ledger.
+3. 10-minute (600 seconds) countdown runs, bound by `breakDeadlineAt`.
+4. Student clicks **"End Break & Continue"** or timer reaches 0:
+   - Client calls `POST /api/v1/exams/:id/break/end`.
+   - Server clears `breakDeadlineAt`, updates `exam.status = IN_PROGRESS`, sets next section's `sectionDeadlineAt = now + 45m`.
+   - Next section begins (`phase = "active"`).
 
 #### Phase 3.9: Final Exam Scoring & Auto-Mistake Capture
 1. In `ExamService.completeExam(examId)`:

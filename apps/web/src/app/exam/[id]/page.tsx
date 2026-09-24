@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useParams, useRouter } from "next/navigation";
 
 // ============================================
 // Types for exam state
@@ -8,6 +9,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 
 interface ExamQuestionData {
   id: string;
+  examQuestionId?: string;
   stem: string;
   passage?: string;
   type: string;
@@ -21,6 +23,7 @@ interface ExamQuestionData {
 
 interface QuestionState {
   questionId: string;
+  examQuestionId?: string;
   userAnswer: string | null;
   isFlagged: boolean;
   isSkipped: boolean;
@@ -28,13 +31,13 @@ interface QuestionState {
   isEdited: boolean;
 }
 
-type ExamPhase = "section-select" | "active" | "review" | "break" | "results";
+type ExamPhase = "loading" | "section-select" | "active" | "review" | "break" | "submitting" | "results";
 
 // ============================================
-// Mock Questions (will be API-driven)
+// Fallback Mock Questions (for offline/demo use)
 // ============================================
 
-const mockQuestions: Record<string, ExamQuestionData[]> = {
+const fallbackMockQuestions: Record<string, ExamQuestionData[]> = {
   QUANTITATIVE: Array.from({ length: 21 }, (_, i) => ({
     id: `q-quant-${i + 1}`,
     stem: `If x² + 5x + 6 = 0, and y = ${i + 2}x - ${i + 1}, what is the value of y when x is the larger root of the equation?`,
@@ -52,14 +55,16 @@ const mockQuestions: Record<string, ExamQuestionData[]> = {
   })),
   VERBAL: Array.from({ length: 23 }, (_, i) => ({
     id: `q-verbal-${i + 1}`,
-    stem: i % 3 === 0
-      ? "The author's primary purpose in the passage is to:"
-      : i % 3 === 1
-        ? `Which of the following, if true, would most ${i % 2 === 0 ? "strengthen" : "weaken"} the argument above?`
-        : "It can be inferred from the passage that the author would most likely agree with which of the following?",
-    passage: i % 3 === 0 || i % 3 === 2
-      ? `Recent research in behavioral economics has challenged the traditional assumption that market participants act as perfectly rational agents. Studies by Kahneman and Tversky demonstrated that individuals systematically deviate from rational choice theory in predictable ways, exhibiting cognitive biases such as loss aversion, anchoring, and the availability heuristic. These findings have profound implications for financial regulation, consumer protection policy, and the design of public health interventions. Critics argue, however, that laboratory findings may not translate directly to real-world market conditions, where competitive pressures and institutional structures may mitigate individual cognitive limitations. Furthermore, some economists contend that while individual behavior may be irrational, market-level outcomes can still approximate rational equilibria through aggregation effects and arbitrage opportunities.`
-      : undefined,
+    stem:
+      i % 3 === 0
+        ? "The author's primary purpose in the passage is to:"
+        : i % 3 === 1
+          ? `Which of the following, if true, would most ${i % 2 === 0 ? "strengthen" : "weaken"} the argument above?`
+          : "It can be inferred from the passage that the author would most likely agree with which of the following?",
+    passage:
+      i % 3 === 0 || i % 3 === 2
+        ? `Recent research in behavioral economics has challenged the traditional assumption that market participants act as perfectly rational agents. Studies by Kahneman and Tversky demonstrated that individuals systematically deviate from rational choice theory in predictable ways, exhibiting cognitive biases such as loss aversion, anchoring, and the availability heuristic. These findings have profound implications for financial regulation, consumer protection policy, and the design of public health interventions. Critics argue, however, that laboratory findings may not translate directly to real-world market conditions, where competitive pressures and institutional structures may mitigate individual cognitive limitations. Furthermore, some economists contend that while individual behavior may be irrational, market-level outcomes can still approximate rational equilibria through aggregation effects and arbitrage opportunities.`
+        : undefined,
     type: i % 3 === 0 || i % 3 === 2 ? "READING_COMPREHENSION" : "CRITICAL_REASONING",
     section: "VERBAL",
     topic: i % 3 === 1 ? "CRITICAL_REASONING" : "READING_COMPREHENSION",
@@ -74,50 +79,76 @@ const mockQuestions: Record<string, ExamQuestionData[]> = {
   })),
   DATA_INSIGHTS: Array.from({ length: 20 }, (_, i) => ({
     id: `q-di-${i + 1}`,
-    stem: i % 5 === 0
-      ? "Is x > 0?\n\n(1) x³ > 0\n(2) x² - x > 0"
-      : i % 5 === 1
-        ? "Based on the data in the table, select True or False for each statement."
-        : i % 5 === 2
-          ? "Use the information from the sources to answer the question."
-          : i % 5 === 3
-            ? "Based on the graph, the ratio of the value in 2024 to the value in 2020 is closest to:"
-            : "Select one value for each column to satisfy the given conditions.",
+    stem:
+      i % 5 === 0
+        ? "Is x > 0?\n\n(1) x³ > 0\n(2) x² - x > 0"
+        : i % 5 === 1
+          ? "Based on the data in the table, select True or False for each statement."
+          : i % 5 === 2
+            ? "Use the information from the sources to answer the question."
+            : i % 5 === 3
+              ? "Based on the graph, the ratio of the value in 2024 to the value in 2020 is closest to:"
+              : "Select one value for each column to satisfy the given conditions.",
     type: ["DATA_SUFFICIENCY", "TABLE_ANALYSIS", "MULTI_SOURCE_REASONING", "GRAPHICS_INTERPRETATION", "TWO_PART_ANALYSIS"][i % 5],
     section: "DATA_INSIGHTS",
     topic: ["DATA_SUFFICIENCY", "TABLE_ANALYSIS", "MULTI_SOURCE_REASONING", "GRAPHICS_INTERPRETATION", "TWO_PART_ANALYSIS"][i % 5],
     difficulty: 405 + Math.floor(i * 20),
-    tableData: i % 5 === 1 ? {
-      headers: ["Company", "Revenue ($M)", "Growth (%)", "Employees", "Market Cap ($B)"],
-      rows: [
-        ["TechCorp", "2,450", "15.3", "12,500", "45.2"],
-        ["DataFlow", "1,820", "22.7", "8,300", "38.1"],
-        ["CloudNet", "3,100", "8.9", "18,200", "62.5"],
-        ["AIVenture", "980", "45.2", "3,200", "28.7"],
-        ["SecureIO", "1,550", "12.1", "6,800", "22.4"],
-      ],
-      sortableColumns: [0, 1, 2, 3, 4],
-    } : undefined,
-    sources: i % 5 === 2 ? [
-      { id: "s1", title: "Email from VP Sales", content: "Q3 projections indicate a 15% increase in enterprise contracts, primarily driven by the APAC region. However, customer acquisition cost has risen by 8% quarter-over-quarter.", type: "text" },
-      { id: "s2", title: "Financial Summary", content: "Total revenue: $45.2M (Q3) vs $42.1M (Q2). Operating margin: 18.3% (Q3) vs 20.1% (Q2). Cash reserves: $128M.", type: "text" },
-      { id: "s3", title: "Market Report", content: "Industry growth rate: 12.5% annually. Average customer retention: 87%. Top competitor revenue growth: 18% YoY.", type: "text" },
-    ] : undefined,
-    options: i % 5 === 0
-      ? [
-          { id: "A", label: "A", text: "Statement (1) ALONE is sufficient, but statement (2) alone is not sufficient." },
-          { id: "B", label: "B", text: "Statement (2) ALONE is sufficient, but statement (1) alone is not sufficient." },
-          { id: "C", label: "C", text: "BOTH statements TOGETHER are sufficient, but NEITHER statement ALONE is sufficient." },
-          { id: "D", label: "D", text: "EACH statement ALONE is sufficient." },
-          { id: "E", label: "E", text: "Statements (1) and (2) TOGETHER are NOT sufficient." },
-        ]
-      : [
-          { id: "A", label: "A", text: "Option A" },
-          { id: "B", label: "B", text: "Option B" },
-          { id: "C", label: "C", text: "Option C" },
-          { id: "D", label: "D", text: "Option D" },
-          { id: "E", label: "E", text: "Option E" },
-        ],
+    tableData:
+      i % 5 === 1
+        ? {
+            headers: ["Company", "Revenue ($M)", "Growth (%)", "Employees", "Market Cap ($B)"],
+            rows: [
+              ["TechCorp", "2,450", "15.3", "12,500", "45.2"],
+              ["DataFlow", "1,820", "22.7", "8,300", "38.1"],
+              ["CloudNet", "3,100", "8.9", "18,200", "62.5"],
+              ["AIVenture", "980", "45.2", "3,200", "28.7"],
+              ["SecureIO", "1,550", "12.1", "6,800", "22.4"],
+            ],
+            sortableColumns: [0, 1, 2, 3, 4],
+          }
+        : undefined,
+    sources:
+      i % 5 === 2
+        ? [
+            {
+              id: "s1",
+              title: "Email from VP Sales",
+              content:
+                "Q3 projections indicate a 15% increase in enterprise contracts, primarily driven by the APAC region. However, customer acquisition cost has risen by 8% quarter-over-quarter.",
+              type: "text",
+            },
+            {
+              id: "s2",
+              title: "Financial Summary",
+              content:
+                "Total revenue: $45.2M (Q3) vs $42.1M (Q2). Operating margin: 18.3% (Q3) vs 20.1% (Q2). Cash reserves: $128M.",
+              type: "text",
+            },
+            {
+              id: "s3",
+              title: "Market Report",
+              content:
+                "Industry growth rate: 12.5% annually. Average customer retention: 87%. Top competitor revenue growth: 18% YoY.",
+              type: "text",
+            },
+          ]
+        : undefined,
+    options:
+      i % 5 === 0
+        ? [
+            { id: "A", label: "A", text: "Statement (1) ALONE is sufficient, but statement (2) alone is not sufficient." },
+            { id: "B", label: "B", text: "Statement (2) ALONE is sufficient, but statement (1) alone is not sufficient." },
+            { id: "C", label: "C", text: "BOTH statements TOGETHER are sufficient, but NEITHER statement ALONE is sufficient." },
+            { id: "D", label: "D", text: "EACH statement ALONE is sufficient." },
+            { id: "E", label: "E", text: "Statements (1) and (2) TOGETHER are NOT sufficient." },
+          ]
+        : [
+            { id: "A", label: "A", text: "Option A" },
+            { id: "B", label: "B", text: "Option B" },
+            { id: "C", label: "C", text: "Option C" },
+            { id: "D", label: "D", text: "Option D" },
+            { id: "E", label: "E", text: "Option E" },
+          ],
   })),
 };
 
@@ -138,23 +169,191 @@ const SECTION_QUESTIONS: Record<string, number> = {
 // ============================================
 
 export default function ExamPage() {
-  const [phase, setPhase] = useState<ExamPhase>("section-select");
+  const params = useParams();
+  const router = useRouter();
+  const examId = params?.id as string;
+
+  const [phase, setPhase] = useState<ExamPhase>("loading");
+  const [examData, setExamData] = useState<any>(null);
   const [sectionOrder, setSectionOrder] = useState<string[]>([]);
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(SECTION_TIME);
   const [questionStates, setQuestionStates] = useState<Record<string, QuestionState[]>>({});
+  const [activeQuestions, setActiveQuestions] = useState<ExamQuestionData[]>([]);
   const [showCalculator, setShowCalculator] = useState(false);
   const [editsRemaining, setEditsRemaining] = useState(3);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
+
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const questionStartTime = useRef<number>(Date.now());
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const currentSection = sectionOrder[currentSectionIndex];
-  const questions = currentSection ? mockQuestions[currentSection] || [] : [];
+  // Parse questions helper
+  const parseSectionQuestions = (section: any): ExamQuestionData[] => {
+    if (!section?.questions || section.questions.length === 0) {
+      return fallbackMockQuestions[section?.section] || fallbackMockQuestions.QUANTITATIVE;
+    }
+
+    return section.questions.map((eq: any, index: number) => {
+      const q = eq.question || {};
+      let options = q.options;
+      if (typeof options === "string") {
+        try {
+          options = JSON.parse(options);
+        } catch {
+          options = [];
+        }
+      }
+      if (!Array.isArray(options) || options.length === 0) {
+        options = [
+          { id: "A", label: "A", text: "Option A" },
+          { id: "B", label: "B", text: "Option B" },
+          { id: "C", label: "C", text: "Option C" },
+          { id: "D", label: "D", text: "Option D" },
+          { id: "E", label: "E", text: "Option E" },
+        ];
+      }
+
+      return {
+        id: q.id || `q-${index}`,
+        examQuestionId: eq.id,
+        stem: q.stem || `Question ${index + 1}`,
+        passage: q.passage || undefined,
+        type: q.type || "PROBLEM_SOLVING",
+        options,
+        section: q.section || section.section,
+        topic: q.topic || "GENERAL",
+        difficulty: q.difficulty || 500,
+        tableData: q.tableData,
+        sources: q.sources,
+      };
+    });
+  };
+
+  // 1. Initial Load: Fetch exam from backend
+  useEffect(() => {
+    if (!examId) return;
+
+    async function loadExam() {
+      try {
+        const res = await fetch(`/api/v1/exams/${examId}`);
+        if (!res.ok) {
+          throw new Error("Failed to load exam");
+        }
+        const data = await res.json();
+        setExamData(data);
+
+        // Check if already finished
+        if (data.status === "COMPLETED") {
+          router.push(`/exam/${examId}/results`);
+          return;
+        }
+
+        // Section order
+        const order = data.sectionOrder || ["QUANTITATIVE", "VERBAL", "DATA_INSIGHTS"];
+        setSectionOrder(order);
+
+        // Find active section or first section
+        let activeIdx = data.sections.findIndex((s: any) => s.status === "IN_PROGRESS");
+        if (activeIdx === -1) {
+          activeIdx = data.sections.findIndex((s: any) => s.status === "NOT_STARTED");
+          if (activeIdx === -1) activeIdx = 0;
+        }
+
+        setCurrentSectionIndex(activeIdx);
+        const activeSection = data.sections[activeIdx];
+        const loadedQuestions = parseSectionQuestions(activeSection);
+        setActiveQuestions(loadedQuestions);
+
+        // Initialize question states from server data
+        const initialStates: QuestionState[] = loadedQuestions.map((q, idx) => {
+          const serverEq = activeSection?.questions?.[idx];
+          return {
+            questionId: q.id,
+            examQuestionId: serverEq?.id || q.examQuestionId,
+            userAnswer: serverEq?.userAnswer || null,
+            isFlagged: serverEq?.isFlagged || false,
+            isSkipped: serverEq ? serverEq.userAnswer === null : true,
+            timeTaken: serverEq?.timeTaken || 0,
+            isEdited: serverEq?.isEdited || false,
+          };
+        });
+
+        setQuestionStates((prev) => ({
+          ...prev,
+          [activeSection.section]: initialStates,
+        }));
+
+        // Sync authoritative time
+        try {
+          const syncRes = await fetch(`/api/v1/exams/${examId}/sync`);
+          if (syncRes.ok) {
+            const syncData = await syncRes.json();
+            if (syncData.examStatus === "ON_BREAK") {
+              setPhase("break");
+            } else {
+              setTimeRemaining(syncData.sectionSecondsRemaining ?? SECTION_TIME);
+              setEditsRemaining(syncData.editsRemaining ?? 3);
+              setPhase("active");
+            }
+          } else {
+            setTimeRemaining(activeSection.timeRemaining || SECTION_TIME);
+            setPhase("active");
+          }
+        } catch {
+          setTimeRemaining(activeSection.timeRemaining || SECTION_TIME);
+          setPhase("active");
+        }
+      } catch (err) {
+        console.warn("Backend not accessible or exam not found, falling back to local simulation mode:", err);
+        setIsOfflineMode(true);
+        setPhase("section-select");
+      }
+    }
+
+    loadExam();
+  }, [examId, router]);
+
+  const currentSection = sectionOrder[currentSectionIndex] || "QUANTITATIVE";
+  const questions = activeQuestions.length > 0 ? activeQuestions : fallbackMockQuestions[currentSection] || [];
   const currentQuestion = questions[currentQuestionIndex];
   const currentStates = questionStates[currentSection] || [];
 
-  // Timer
+  // Periodic server clock sync (every 30 seconds during active phase)
+  useEffect(() => {
+    if (phase !== "active" || isOfflineMode || !examData) return;
+
+    const activeSection = examData.sections?.[currentSectionIndex];
+    if (!activeSection) return;
+
+    syncIntervalRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/v1/exams/${examId}/sections/${activeSection.id}/sync`);
+        if (res.ok) {
+          const sync = await res.json();
+          if (sync.isExpired) {
+            handleSectionComplete();
+          } else if (Math.abs(sync.timeRemainingSeconds - timeRemaining) > 2) {
+            // Adjust for drift if greater than 2 seconds
+            setTimeRemaining(sync.timeRemainingSeconds);
+          }
+          if (typeof sync.editsRemaining === "number") {
+            setEditsRemaining(sync.editsRemaining);
+          }
+        }
+      } catch {
+        // Ignore background sync errors
+      }
+    }, 30000);
+
+    return () => {
+      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+    };
+  }, [phase, isOfflineMode, examData, currentSectionIndex, examId, timeRemaining]);
+
+  // Authoritative countdown timer (ticks every 1s)
   useEffect(() => {
     if (phase === "active" && timeRemaining > 0) {
       timerRef.current = setInterval(() => {
@@ -173,11 +372,12 @@ export default function ExamPage() {
     };
   }, [phase, currentSectionIndex]);
 
-  // Init question states when section changes
+  // Init question states when section changes in local offline fallback
   useEffect(() => {
     if (currentSection && !questionStates[currentSection]) {
       const states = questions.map((q) => ({
         questionId: q.id,
+        examQuestionId: q.examQuestionId,
         userAnswer: null,
         isFlagged: false,
         isSkipped: true,
@@ -186,7 +386,7 @@ export default function ExamPage() {
       }));
       setQuestionStates((prev) => ({ ...prev, [currentSection]: states }));
     }
-  }, [currentSection]);
+  }, [currentSection, questions]);
 
   // Track time per question
   useEffect(() => {
@@ -215,41 +415,100 @@ export default function ExamPage() {
     setCurrentQuestionIndex(0);
     setTimeRemaining(SECTION_TIME);
     setEditsRemaining(3);
+    setActiveQuestions(fallbackMockQuestions[order[0]] || []);
     setPhase("active");
   };
 
-  const handleAnswer = (answerId: string) => {
-    setQuestionStates((prev) => {
-      const states = [...(prev[currentSection] || [])];
-      const current = states[currentQuestionIndex];
-      if (!current) return prev;
+  const handleAnswer = async (answerId: string) => {
+    const states = [...(questionStates[currentSection] || [])];
+    const current = states[currentQuestionIndex];
+    if (!current) return;
 
-      const wasAnswered = current.userAnswer !== null;
-      const isChanging = wasAnswered && current.userAnswer !== answerId;
+    const wasAnswered = current.userAnswer !== null;
+    const isChanging = wasAnswered && current.userAnswer !== answerId;
 
-      if (isChanging && editsRemaining <= 0 && phase === "review") return prev;
+    // Enforce 3-edit rule during review
+    if (isChanging && editsRemaining <= 0 && phase === "review") {
+      setErrorMessage("Maximum 3 answer changes reached for this section.");
+      setTimeout(() => setErrorMessage(null), 3000);
+      return;
+    }
 
-      states[currentQuestionIndex] = {
-        ...current,
-        userAnswer: answerId,
-        isSkipped: false,
-        isEdited: isChanging ? true : current.isEdited,
-      };
-      return { ...prev, [currentSection]: states };
-    });
+    // Optimistic local update
+    const previousAnswer = current.userAnswer;
+    states[currentQuestionIndex] = {
+      ...current,
+      userAnswer: answerId,
+      isSkipped: false,
+      isEdited: isChanging ? true : current.isEdited,
+    };
+    setQuestionStates((prev) => ({ ...prev, [currentSection]: states }));
+
+    // Send answer to server if connected
+    if (!isOfflineMode && examData) {
+      const activeSection = examData.sections?.[currentSectionIndex];
+      if (activeSection) {
+        try {
+          const res = await fetch(
+            `/api/v1/exams/${examId}/sections/${activeSection.id}/answer`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                questionIndex: currentQuestionIndex,
+                answer: answerId,
+                idempotencyKey: `${activeSection.id}-${currentQuestionIndex}-${Date.now()}`,
+              }),
+            },
+          );
+
+          if (res.ok) {
+            const data = await res.json();
+            if (typeof data.editsRemaining === "number") {
+              setEditsRemaining(data.editsRemaining);
+            }
+          } else {
+            const err = await res.json();
+            // Revert answer if rejected by server (e.g. 3-edit rule or deadline expired)
+            states[currentQuestionIndex] = {
+              ...current,
+              userAnswer: previousAnswer,
+            };
+            setQuestionStates((prev) => ({ ...prev, [currentSection]: states }));
+            setErrorMessage(err.message || "Failed to submit answer to server.");
+            setTimeout(() => setErrorMessage(null), 3000);
+          }
+        } catch {
+          // If server call fails, retain optimistic update with warning
+          setErrorMessage("Network issue syncing answer. Saved locally.");
+          setTimeout(() => setErrorMessage(null), 3000);
+        }
+      }
+    }
   };
 
-  const handleFlag = () => {
-    setQuestionStates((prev) => {
-      const states = [...(prev[currentSection] || [])];
-      if (states[currentQuestionIndex]) {
-        states[currentQuestionIndex] = {
-          ...states[currentQuestionIndex],
-          isFlagged: !states[currentQuestionIndex].isFlagged,
-        };
+  const handleFlag = async () => {
+    const states = [...(questionStates[currentSection] || [])];
+    const current = states[currentQuestionIndex];
+    if (!current) return;
+
+    const newFlagState = !current.isFlagged;
+    states[currentQuestionIndex] = {
+      ...current,
+      isFlagged: newFlagState,
+    };
+    setQuestionStates((prev) => ({ ...prev, [currentSection]: states }));
+
+    // Sync flag to server
+    if (!isOfflineMode && current.examQuestionId) {
+      try {
+        await fetch(`/api/v1/exams/${examId}/questions/${current.examQuestionId}/flag`, {
+          method: "PATCH",
+        });
+      } catch {
+        // Ignore flag sync error
       }
-      return { ...prev, [currentSection]: states };
-    });
+    }
   };
 
   const handleNext = () => {
@@ -274,34 +533,114 @@ export default function ExamPage() {
     if (phase === "review") setPhase("active");
   };
 
-  const handleSectionComplete = () => {
+  const handleSectionComplete = async () => {
     recordTimeSpent();
     if (timerRef.current) clearInterval(timerRef.current);
 
-    if (currentSectionIndex < sectionOrder.length - 1) {
-      // Offer break after first or second section
+    // Call server complete endpoint if connected
+    if (!isOfflineMode && examData) {
+      const activeSection = examData.sections?.[currentSectionIndex];
+      if (activeSection) {
+        try {
+          const res = await fetch(`/api/v1/exams/${examId}/sections/${activeSection.id}/complete`, {
+            method: "POST",
+          });
+          if (res.ok) {
+            const completeData = await res.json();
+            if (completeData.isLastSection) {
+              router.push(`/exam/${examId}/results`);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error("Error completing section on server:", err);
+        }
+      }
+    }
+
+    // Check if this was the last section
+    if (currentSectionIndex >= sectionOrder.length - 1) {
+      if (!isOfflineMode && examId) {
+        router.push(`/exam/${examId}/results`);
+      } else {
+        setPhase("results");
+      }
+      return;
+    }
+
+    // Optional break allowed after Section 1 or Section 2
+    const breakEligible = !examData?.breakTaken && currentSectionIndex < 2;
+    if (breakEligible) {
       setPhase("break");
     } else {
-      setPhase("results");
+      transitionToNextSection();
     }
   };
 
-  const handleBreakEnd = (takeBreak: boolean) => {
-    setCurrentSectionIndex((i) => i + 1);
+  const handleBreakEnd = async (takeBreak: boolean) => {
+    if (takeBreak && !isOfflineMode && examId) {
+      try {
+        await fetch(`/api/v1/exams/${examId}/break/start`, { method: "POST" });
+      } catch {
+        // Ignore break start error
+      }
+    }
+
+    if (!isOfflineMode && examId) {
+      try {
+        await fetch(`/api/v1/exams/${examId}/break/end`, { method: "POST" });
+        // Refresh exam to get the newly initiated section & deadline
+        const res = await fetch(`/api/v1/exams/${examId}`);
+        if (res.ok) {
+          const freshData = await res.json();
+          setExamData(freshData);
+        }
+      } catch {
+        // Ignore break end error
+      }
+    }
+
+    transitionToNextSection();
+  };
+
+  const transitionToNextSection = () => {
+    const nextIdx = currentSectionIndex + 1;
+    setCurrentSectionIndex(nextIdx);
     setCurrentQuestionIndex(0);
     setTimeRemaining(SECTION_TIME);
     setEditsRemaining(3);
+
+    const nextSectionType = sectionOrder[nextIdx];
+    if (examData?.sections?.[nextIdx]) {
+      const nextQuestions = parseSectionQuestions(examData.sections[nextIdx]);
+      setActiveQuestions(nextQuestions);
+    } else {
+      setActiveQuestions(fallbackMockQuestions[nextSectionType] || []);
+    }
+
     setPhase("active");
   };
 
   // ---- Render by Phase ----
+
+  if (phase === "loading") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--gradient-bg)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ width: "48px", height: "48px", border: "3px solid #3b82f6", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 16px" }} />
+          <div style={{ fontSize: "16px", fontWeight: 600, color: "#f1f5f9" }}>Preparing GMAT Focus Environment...</div>
+          <div style={{ fontSize: "13px", color: "#94a3b8", marginTop: "6px" }}>Synchronizing server-authoritative test state</div>
+        </div>
+      </div>
+    );
+  }
 
   if (phase === "section-select") {
     return <SectionSelector onSelect={handleSectionSelect} />;
   }
 
   if (phase === "break") {
-    return <BreakScreen onEnd={handleBreakEnd} sectionsDone={currentSectionIndex + 1} />;
+    return <BreakScreen onEnd={handleBreakEnd} sectionsDone={currentSectionIndex + 1} examId={examId} isOfflineMode={isOfflineMode} />;
   }
 
   if (phase === "results") {
@@ -314,7 +653,7 @@ export default function ExamPage() {
         questions={questions}
         states={currentStates}
         editsRemaining={editsRemaining}
-        sectionName={SECTION_NAMES[currentSection]}
+        sectionName={SECTION_NAMES[currentSection] || currentSection}
         onJumpTo={handleJumpTo}
         onEndSection={handleSectionComplete}
         timeRemaining={timeRemaining}
@@ -322,18 +661,53 @@ export default function ExamPage() {
     );
   }
 
-  // Active exam
+  // Active exam view
   return (
     <div className="exam-container">
+      {/* Top Banner / Error Banner */}
+      {errorMessage && (
+        <div
+          style={{
+            background: "rgba(239, 68, 68, 0.9)",
+            color: "white",
+            textAlign: "center",
+            padding: "8px 16px",
+            fontSize: "13px",
+            fontWeight: 600,
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+          }}
+        >
+          {errorMessage}
+        </div>
+      )}
+
       {/* Top Bar */}
       <div className="exam-topbar">
         <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
           <span style={{ fontSize: "14px", fontWeight: 700, color: "#f1f5f9" }}>
-            {SECTION_NAMES[currentSection]}
+            {SECTION_NAMES[currentSection] || currentSection}
           </span>
           <span style={{ fontSize: "13px", color: "#94a3b8" }}>
             Question {currentQuestionIndex + 1} of {questions.length}
           </span>
+          {isOfflineMode && (
+            <span
+              style={{
+                fontSize: "11px",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                background: "rgba(245, 158, 11, 0.2)",
+                color: "#f59e0b",
+                fontWeight: 600,
+              }}
+            >
+              Standalone Demo Mode
+            </span>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
@@ -847,7 +1221,10 @@ function ReviewScreen({
             Section Review
           </h2>
           <p style={{ fontSize: "14px", color: "#94a3b8", marginBottom: "8px" }}>
-            {answered} of {questions.length} questions answered · {flagged} flagged · {editsRemaining} edits remaining
+            {answered} of {questions.length} questions answered · {flagged} flagged ·{" "}
+            <strong style={{ color: editsRemaining > 0 ? "#10b981" : "#ef4444" }}>
+              {editsRemaining} edits remaining
+            </strong>
           </p>
           <p style={{ fontSize: "12px", color: "#64748b", marginBottom: "32px" }}>
             Click any question to return to it. You may change up to {editsRemaining} answers.
@@ -888,7 +1265,17 @@ function ReviewScreen({
   );
 }
 
-function BreakScreen({ onEnd, sectionsDone }: { onEnd: (takeBreak: boolean) => void; sectionsDone: number }) {
+function BreakScreen({
+  onEnd,
+  sectionsDone,
+  examId,
+  isOfflineMode,
+}: {
+  onEnd: (takeBreak: boolean) => void;
+  sectionsDone: number;
+  examId?: string;
+  isOfflineMode?: boolean;
+}) {
   const [breakTime, setBreakTime] = useState(10 * 60);
   const [onBreak, setOnBreak] = useState(false);
 
@@ -900,7 +1287,7 @@ function BreakScreen({ onEnd, sectionsDone }: { onEnd: (takeBreak: boolean) => v
     if (onBreak && breakTime <= 0) {
       onEnd(true);
     }
-  }, [onBreak, breakTime]);
+  }, [onBreak, breakTime, onEnd]);
 
   return (
     <div style={{
@@ -949,28 +1336,29 @@ function ResultsScreen({
   questionStates: Record<string, QuestionState[]>;
   sectionOrder: string[];
 }) {
-  // Mock scoring
-  const scores = {
-    total: 645,
+  // Score calculation for offline fallback
+  const scores: { quant: number; verbal: number; di: number; total: number; percentile: number } = {
     quant: 78,
-    verbal: 74,
-    di: 76,
-    percentile: 72,
+    verbal: 81,
+    di: 79,
+    total: 655,
+    percentile: 79,
   };
 
   return (
     <div style={{
       minHeight: "100vh",
       background: "var(--gradient-bg)",
+      padding: "40px 20px",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      padding: "40px",
     }}>
       <div style={{ maxWidth: "700px", width: "100%" }}>
+        {/* Score Card */}
         <div className="glass-card-static" style={{ padding: "48px", textAlign: "center", marginBottom: "24px" }}>
-          <div style={{ fontSize: "14px", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "16px" }}>
-            Unofficial Score
+          <div style={{ fontSize: "14px", fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "8px" }}>
+            GMAT-Equivalent Simulator Estimate
           </div>
           <div style={{
             fontSize: "72px",

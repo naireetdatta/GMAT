@@ -37,8 +37,9 @@ export class ScoringService {
     const normalized = (avgSectionScore - 60) / (90 - 60);
     const rawScore = 205 + normalized * (805 - 205);
 
-    // Round to nearest 10
-    const roundedScore = Math.round(rawScore / 10) * 10;
+    // Round to nearest GMAT Focus 10-point increment (ending in 5: 205, 215, ..., 805)
+    const stepCount = Math.round((rawScore - 205) / 10);
+    const roundedScore = 205 + stepCount * 10;
 
     // Clamp to valid range
     return Math.max(205, Math.min(805, roundedScore));
@@ -86,5 +87,30 @@ export class ScoringService {
     }
 
     return 0;
+  }
+
+  /**
+   * Calculate score estimate with uncertainty intervals (SEM & 95% CI)
+   */
+  calculateScoreEstimateWithUncertainty(
+    quantScore: number,
+    verbalScore: number,
+    diScore: number,
+    thetaSem: number = 0.3,
+  ) {
+    const score = this.calculateTotalScore(quantScore, verbalScore, diScore);
+    const scoreSem = Math.max(10, Math.round(thetaSem * 35));
+    const rawLower = score - 1.96 * scoreSem;
+    const rawUpper = score + 1.96 * scoreSem;
+    const ci95Lower = Math.max(205, 205 + Math.round((rawLower - 205) / 10) * 10);
+    const ci95Upper = Math.min(805, 205 + Math.round((rawUpper - 205) / 10) * 10);
+
+    return {
+      score,
+      sem: scoreSem,
+      ci95Lower,
+      ci95Upper,
+      percentile: this.calculatePercentile(score),
+    };
   }
 }

@@ -26,18 +26,55 @@ export class ExamController {
     return this.examService.getExam(id);
   }
 
+  @Get(':id/sync')
+  async syncExam(@Param('id') id: string) {
+    return this.examService.syncTime(id);
+  }
+
+  @Get(':id/sections/:sectionId/sync')
+  async syncSectionTime(
+    @Param('id') examId: string,
+    @Param('sectionId') sectionId: string,
+  ) {
+    return this.examService.syncTime(examId, sectionId);
+  }
+
   @Patch(':id/sections/:sectionId/answer')
   async submitAnswer(
     @Param('id') examId: string,
     @Param('sectionId') sectionId: string,
-    @Body() body: { questionIndex: number; answer: string },
+    @Body() body: { questionIndex: number; answer: string; idempotencyKey?: string },
   ) {
-    return this.examService.submitAnswer(examId, sectionId, body.questionIndex, body.answer);
+    return this.examService.submitAnswer(
+      examId,
+      sectionId,
+      body.questionIndex,
+      body.answer,
+      body.idempotencyKey,
+    );
   }
 
   @Patch(':id/questions/:questionId/flag')
   async flagQuestion(@Param('questionId') questionId: string) {
     return this.examService.flagQuestion(questionId);
+  }
+
+  @Post(':id/break/start')
+  async startBreak(@Param('id') examId: string) {
+    return this.examService.startBreak(examId);
+  }
+
+  @Post(':id/break/end')
+  async endBreak(@Param('id') examId: string) {
+    return this.examService.endBreak(examId);
+  }
+
+  @Post(':id/events')
+  async recordEvent(
+    @Param('id') examId: string,
+    @Body() body: { type: string; sectionId?: string; sequenceNumber?: number; idempotencyKey?: string; payload?: any },
+  ) {
+    return this.examService.recordEvent(examId, body);
   }
 
   @Post(':id/sections/:sectionId/complete')

@@ -269,6 +269,42 @@ Use **KaTeX** (`katex` and CSS styling) for math rendering.
 
 ---
 
+## ADR 011: Server-Authoritative Timer & 3-Edit Review Enforcement
+
+### Status
+Accepted
+
+### Context
+Client-side timers can be manipulated via browser developer tools, tab suspension, device clock alteration, or network lags. Additionally, the GMAT Focus Edition imposes a strict rule: test-takers may review any question in the section, but can only alter up to **3 answers per section**. Relying on client state for this rule allows tampering.
+
+### Decision
+1. **Server-Enforced Deadlines**: Every `ExamSection` stores an absolute UTC `sectionDeadlineAt`. Client countdown is synchronized via `/api/v1/exams/:id/sections/:sectionId/sync`. Answers submitted after `sectionDeadlineAt` are strictly rejected with HTTP 400 Bad Request.
+2. **Server-Enforced 3-Edit Quota**: Every `ExamSection` maintains an `editsRemaining` counter (initialized to 3). Modifying an existing answer decrements the counter and marks the question `isEdited = true`. If a client attempts a 4th modification, the transaction rejects the edit with HTTP 400.
+3. **Single Break Engine**: GMAT Focus allows one optional 10-minute break after Section 1 or Section 2. The server records `breakTaken = true` and `breakDeadlineAt = now + 10m`. Attempting a second break or initiating a break after section 3 is blocked.
+
+### Rationale & Benefits
+* **High-Fidelity Simulation Integrity**: Ensures identical time pressure and review discipline to the real Pearson VUE exam environment.
+* **Resilience to Network Drops**: Client can continue tracking time locally while knowing the exact server deadline timestamp, reconnecting cleanly.
+
+---
+
+## ADR 012: Psychometric Calibration, Fisher Information Correction & Score Uncertainty
+
+### Status
+Accepted
+
+### Context
+1. **Fisher Information Formula**: In 3PL IRT, Lord's Fisher information formula is $I(\theta) = a^2 \cdot \frac{1-p}{p} \cdot \left(\frac{p-c}{1-c}\right)^2$. An erroneous implementation had $(1-p)$ in the denominator, causing information to diverge to $+\infty$ at high ability estimates.
+2. **GMAT Focus 10-point Increments**: The GMAT Focus score scale ranges from 205 to 805 in steps of 10 (205, 215, 225, ..., 805). Standard rounding `Math.round(score / 10) * 10` produced numbers ending in 0 (e.g. 210, 650), which do not exist in GMAT Focus.
+3. **Legal & Psychometric Transparency**: GMAC's proprietary CAT algorithm cannot be legally claimed as duplicated. Scores must be transparently reported as simulator estimates with standard error bounds (SEM).
+
+### Decision
+1. Correct the Fisher Information formula in `IrtService` so information properly peaks near difficulty $b$ and approaches 0 as $\theta \to \infty$.
+2. Implement exact step-rounding: `205 + Math.round((rawScore - 205) / 10) * 10` for total score, and clamp section scores to integers [60, 90].
+3. Expose standard error of measurement (SEM) and 95% confidence intervals on results screens, paired with an explicit disclaimer separating simulator estimates from official GMAC scores.
+
+---
+
 ## 📦 Comprehensive Library Evaluation Matrix
 
 | Library / Tool | Package | Chosen Over | Core Reason & Value Delivered |

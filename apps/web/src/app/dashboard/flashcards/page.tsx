@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { 
-  Cards, Brain, Plus, Check, Clock, Sparkles, RefreshCw, AlertCircle, ChevronRight, X
+  Layers, Brain, Plus, Check, Clock, Sparkles, RefreshCw, AlertCircle, ChevronRight, X
 } from "lucide-react";
 
 enum FlashcardType {

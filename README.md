@@ -58,15 +58,18 @@ This platform replicates these exact exam conditions down to pixel and milliseco
   * **Data Insights**: 20 questions, 45 minutes (Data Sufficiency, Table Analysis with sortable columns, Multi-Source Reasoning with multi-tab sources, Graphics Interpretation, Two-Part Analysis matrix radio selectors).
 * **Section Order Customization**: Choose from all 6 official permutations prior to starting:
   * Q-V-DI, Q-DI-V, V-Q-DI, V-DI-Q, DI-Q-V, or DI-V-Q.
-* **Strict Official GMAT Review Screen**:
-  * Bookmarked/flagged question filters.
-  * Answered vs. skipped question status indicators.
-  * Strict enforcement of the **maximum 3 answer edits** per section.
-* **Pacing & Break Management**:
-  * Real-time countdown timer with 5-minute caution (yellow) and 1-minute urgent (red pulsing) thresholds.
-  * 10-minute optional break screen with countdown timer between sections.
-* **Anti-Cheat Monitoring**:
-  * Client-side detection of window blur, tab switching, and copy attempts, logged for exam integrity analytics.
+* **Server-Authoritative Test Timer**:
+  * Absolute UTC deadlines (`sectionDeadlineAt`) enforced by the backend server; late submissions are rejected with HTTP 400.
+  * Real-time client timer synchronized via `/api/v1/exams/:id/sync` with 30s drift compensation heartbeats.
+  * Visual pacing alerts: 5-minute caution (yellow) and 1-minute urgent (red pulsing) thresholds.
+* **Strict 3-Edit Review Enforcement**:
+  * Server-authoritative quota (`editsRemaining`) initialized to 3 per section.
+  * Modifying an answer atomically decrements the quota in database; attempts to alter a 4th answer are rejected by both frontend and backend.
+* **Single Break Engine**:
+  * One optional 10-minute break allowed after Section 1 or Section 2.
+  * Server state machine transitions `IN_PROGRESS` $\leftrightarrow$ `ON_BREAK` via dedicated `/break/start` and `/break/end` endpoints with 600-second deadline enforcement.
+* **Append-Only Event Ledger (`ExamEvent`)**:
+  * Tracks every test-delivery event (`EXAM_STARTED`, `SECTION_STARTED`, `ANSWER_SUBMITTED`, `BREAK_STARTED`, `BREAK_ENDED`, `SECTION_COMPLETED`) with sequence numbering and idempotency keys.
 * **Interactive Tooling**:
   * Built-in on-screen calculator provided exclusively during the Data Insights section.
 
@@ -76,14 +79,16 @@ This platform replicates these exact exam conditions down to pixel and milliseco
   * $b$ = Item Difficulty parameter.
   * $a$ = Item Discrimination parameter.
   * $c$ = Pseudo-guessing parameter (fixed at 0.20 for 5-choice multiple choice).
-* **Maximum Fisher Information (MFI) Item Selection**:
-  * Selects questions that maximize test information at the student's estimated ability level ($\theta$).
+* **Calibrated Fisher Information Formula (Lord's 3PL)**:
+  $$I(\theta) = a^2 \cdot \frac{1 - P(\theta)}{P(\theta)} \cdot \left(\frac{P(\theta) - c}{1 - c}\right)^2$$
+  * Correct mathematical formulation ensuring information peaks at item difficulty $b$ and correctly decays to 0 as $\theta \to \infty$.
 * **Bayesian Expected A Posteriori (EAP) Ability Estimation**:
   * Quadrature numerical integration over $[-3.0, 3.0]$ with standard normal prior $\mathcal{N}(0, 1)$ to prevent divergent MLE estimations on all-correct or all-wrong response strings.
 * **Content & Topic Balancing**:
   * Constrained shadow-selection ensuring balanced topic distribution across all tested subjects within each section.
-* **Official Scale Calibration**:
-  * Theta-to-score projection mapping $\theta \in [-3.0, 3.0]$ to section scores ($60-90$) and aggregate total scores ($205-805$).
+* **Official Scale Calibration & Score Uncertainty**:
+  * Theta-to-score projection mapping $\theta \in [-3.0, 3.0]$ to section scores ($60-90$) and aggregate total scores ($205-805$ in 10-point increments strictly ending in 5: 205, 215, 225, ..., 805).
+  * Reports Standard Error of Measurement (SEM) and 95% Confidence Intervals with an explicit disclaimer distinguishing simulator estimates from official GMAC scores.
 
 ### 3. Multi-Model AI Orchestrator & Agents
 A decoupled, vendor-agnostic architecture assigning specialized AI models to distinct cognitive tasks via standard environment variables:
